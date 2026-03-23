@@ -1,0 +1,36 @@
+# Kongnitive ROS2 EdgeMCP Configuration
+
+# Server settings
+server:
+  name: "Kongnitive ROS2 EdgeMCP"
+  transport: "stdio"
+  log_level: "INFO"
+
+# Node management
+nodes:
+  script_dir: "~/.kongnitive_ros2_edgemcp/nodes"
+  max_nodes: 10
+
+# Logging
+logging:
+  buffer_size: 1000
+  default_limit: 100
+
+# System monitoring
+monitoring:
+  status_interval: 1.0  # seconds
+  temperature_enabled: true
+
+# ROS2 settings
+ros2:
+  domain_id: 0
+  executor_threads: 4
+
+# Phase 3+ settings (deferred)
+# gpu:
+#   tensorrt_enabled: false
+#   model_dir: "~/.kongnitive_ros2_edgemcp/models"
+#
+# discovery:
+#   mdns_enabled: false
+#   scan_interval: 30.0
