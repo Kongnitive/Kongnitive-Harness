@@ -26,6 +26,12 @@ ros2:
   domain_id: 0
   executor_threads: 4
 
+# Episode simulation / AI iteration loop
+episode:
+  default_strategy: "hardcoded_v1"
+  baseline_success_threshold: 0.95
+  max_randomized_runs: 200
+
 # Phase 3+ settings (deferred)
 # gpu:
 #   tensorrt_enabled: false

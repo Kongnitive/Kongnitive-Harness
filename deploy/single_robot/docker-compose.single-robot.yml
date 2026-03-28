@@ -1,0 +1,29 @@
+services:
+  edgemcp_robot_a:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.edgemcp
+    container_name: edgemcp-robot-a
+    network_mode: host
+    working_dir: /ws
+    stdin_open: true
+    tty: true
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+      KONGNITIVE_CONFIG_DIR: /ws/deploy/single_robot/config
+      ROBOT_NAMESPACE: /robot_a
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ../../:/ws
+      - edgemcp_robot_a_scripts:/root/.kongnitive_ros2_edgemcp/robot_a_nodes
+    command: >
+      bash -lc "
+      source /opt/ros/humble/setup.bash &&
+      pip3 install -e . &&
+      python3 -m kongnitive_ros2_edgemcp.server
+      "
+
+volumes:
+  edgemcp_robot_a_scripts:
+

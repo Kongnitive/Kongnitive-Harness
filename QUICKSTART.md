@@ -44,6 +44,111 @@ python3 kongnitive_ros2_edgemcp/server.py
 
 The server will start and listen on stdio for MCP commands.
 
+## Single Robot First (Recommended)
+
+Use this path to get one robot running first, then expand to multi-robot.
+
+### 1) Start Gazebo on host
+
+```bash
+cd /path/to/kongnitive-ros2-edgemcp
+chmod +x scripts/start_gazebo_host.sh scripts/start_edgemcp_container.sh
+
+# Replace with your real sim launch command
+./scripts/start_gazebo_host.sh "ros2 launch my_pick_place_sim tabletop.launch.py"
+```
+
+PowerShell equivalent:
+
+```powershell
+Set-Location D:\Projects\edgemcp\kongnitive-ros2-edgemcp
+.\scripts\start_gazebo_host.ps1 -LaunchCommand "ros2 launch my_pick_place_sim tabletop.launch.py" -RosDomainId 0 -WslDistro Ubuntu-22.04
+```
+
+### 2) Start EdgeMCP in container
+
+```bash
+cd /path/to/kongnitive-ros2-edgemcp
+ROS_DOMAIN_ID=0 ./scripts/start_single_robot_edgemcp.sh
+```
+
+PowerShell equivalent:
+
+```powershell
+Set-Location D:\Projects\edgemcp\kongnitive-ros2-edgemcp
+.\scripts\start_single_robot_edgemcp.ps1 -RosDomainId 0
+```
+
+Both sides must use the same `ROS_DOMAIN_ID`.
+
+### 3) Stop container
+
+```bash
+cd /path/to/kongnitive-ros2-edgemcp
+docker compose -f deploy/single_robot/docker-compose.single-robot.yml down
+```
+
+PowerShell equivalent:
+
+```powershell
+Set-Location D:\Projects\edgemcp\kongnitive-ros2-edgemcp
+docker compose -f deploy/single_robot/docker-compose.single-robot.yml down
+```
+
+### 4) Optional: debug in container
+
+Edit `docker-compose.host-gazebo.yml` command to:
+
+```bash
+bash -lc "source /opt/ros/humble/setup.bash && pip3 install -e . debugpy && python3 -m debugpy --listen 0.0.0.0:5678 --wait-for-client -m kongnitive_ros2_edgemcp.server"
+```
+
+Then attach IDE debugger to `localhost:5678`.
+
+Single-robot deploy files:
+- `deploy/single_robot/docker-compose.single-robot.yml`
+- `deploy/single_robot/config/server_config.yaml`
+
+## Host Gazebo + Container EdgeMCP (Legacy Single-Container Path)
+
+If you still want to use the legacy root-level compose:
+- `docker-compose.host-gazebo.yml`
+- `scripts/start_edgemcp_container.ps1` / `scripts/start_edgemcp_container.sh`
+
+## Two-Robot MVP (Shared Gazebo World)
+
+### Start both EdgeMCP instances
+
+```powershell
+Set-Location D:\Projects\edgemcp\kongnitive-ros2-edgemcp
+.\scripts\start_two_robot_edgemcp.ps1 -RosDomainId 0
+```
+
+```bash
+cd /path/to/kongnitive-ros2-edgemcp
+./scripts/start_two_robot_edgemcp.sh
+```
+
+### Start shared Gazebo world
+
+```powershell
+Set-Location D:\Projects\edgemcp\kongnitive-ros2-edgemcp
+.\scripts\start_gazebo_host.ps1 -LaunchCommand "ros2 launch my_pick_place_sim multi_robot_shared_world.launch.py" -RosDomainId 0 -WslDistro Ubuntu-22.04
+```
+
+Compose and config templates:
+- `deploy/multi_robot/docker-compose.two-robots.yml`
+- `deploy/multi_robot/config/robot_a/server_config.yaml`
+- `deploy/multi_robot/config/robot_b/server_config.yaml`
+- `deploy/multi_robot/templates/multi_robot_shared_world.launch.py`
+
+## Recommended Simulation Stack
+
+For tabletop pick-and-place, prefer:
+- Gazebo (`ros_gz`) as primary 3D simulator
+- MoveIt2 + `ros2_control` for planning and control
+- EdgeMCP hot-swap for editable perception/decision/recovery nodes
+
 ## Testing Hot-Swap
 
 ### Manual Test (Python)
@@ -119,6 +224,34 @@ modified_script = script.replace(
 result = await ros_push_node('detector', modified_script)
 print(result)
 # Node reloads in <100ms!
+```
+
+### Episode Loop (AI Iteration)
+
+```python
+# 1) Run deterministic episode with randomization profile
+run = await run_episode(
+    seed=1001,
+    profile={
+        "object_pose_jitter": 0.15,
+        "camera_pose_jitter": 0.08,
+        "sensor_noise": 0.10
+    },
+    strategy="hardcoded_v1"
+)
+run_id = run["result"]["run_id"]
+
+# 2) Fetch metrics
+metrics = await get_metrics(run_id)
+print(metrics["summary"])
+
+# 3) Inspect failure trace
+trace = await get_failure_trace(run_id)
+print(trace["trace"])
+
+# 4) Patch node with rollback safety
+patch = await patch_and_restart("detector", modified_script)
+print(patch)
 ```
 
 ## Verifying Installation

@@ -81,6 +81,18 @@ kongnitive-ros2-edgemcp
 python -m kongnitive_ros2_edgemcp.server
 ```
 
+### Recommended First Run (Single Robot)
+
+```powershell
+Set-Location D:\Projects\edgemcp\kongnitive-ros2-edgemcp
+.\scripts\start_gazebo_host.ps1 -LaunchCommand "ros2 launch my_pick_place_sim tabletop.launch.py" -RosDomainId 0 -WslDistro Ubuntu-22.04
+.\scripts\start_single_robot_edgemcp.ps1 -RosDomainId 0
+```
+
+Single-robot deployment files:
+- `deploy/single_robot/docker-compose.single-robot.yml`
+- `deploy/single_robot/config/server_config.yaml`
+
 ### Testing Hot-Swap
 
 ```python
@@ -126,7 +138,7 @@ def create_node():
 
 See `examples/` for complete examples.
 
-## MCP Tools (Phase 1)
+## MCP Tools (Phase 1 + Episode Loop)
 
 ### System Tools
 
@@ -143,6 +155,13 @@ See `examples/` for complete examples.
 - **ros_stop_node(node_name)** - Stop running node
 - **ros_restart_node(node_name)** - Restart node
 
+### Episode / AI Iteration
+
+- **run_episode(seed, profile, strategy)** - Run reproducible pick-and-place episode
+- **get_metrics(run_id)** - Return per-run metrics + aggregate success/failure summary
+- **get_failure_trace(run_id)** - Return stage-level failure diagnostics
+- **patch_and_restart(node_name, code)** - Hot-patch node with automatic rollback
+
 ## AI Workflow
 
 1. **Understand** - `get_status()` shows system state
@@ -150,6 +169,17 @@ See `examples/` for complete examples.
 3. **Fix** - `ros_push_node()` deploys updated code
 4. **Verify** - Check `ros_list_nodes()` and logs
 5. **Iterate** - Repeat until working
+
+## Gazebo + MoveIt2 Integration Direction
+
+This repository now exposes a deterministic episode API for AI self-iteration.
+Use Gazebo (`ros_gz`) + MoveIt2 + `ros2_control` as the primary stack:
+
+1. Build tabletop world (table, objects, obstacles, camera, force/torque)
+2. Connect robot model via URDF/Xacro and `ros2_control`
+3. Keep planning/control baseline stable in MoveIt2
+4. Put editable logic (perception/decision/recovery) in hot-swappable nodes
+5. Drive evaluation through `run_episode` + `get_failure_trace` + `patch_and_restart`
 
 ## Hot-Swap Mechanism
 
@@ -171,10 +201,12 @@ kongnitive-ros2-edgemcp/
 ├── kongnitive_ros2_edgemcp/
 │   ├── server.py              # FastMCP server entry point
 │   ├── core/
-│   │   └── node_manager.py    # Hot-swap engine
+│   │   ├── node_manager.py    # Hot-swap engine
+│   │   └── episode_manager.py # Reproducible episode loop
 │   ├── tools/
 │   │   ├── system_tools.py    # System monitoring
-│   │   └── node_tools.py      # Node management
+│   │   ├── node_tools.py      # Node management
+│   │   └── episode_tools.py   # Episode + patch loop tools
 │   └── ...
 ├── examples/
 │   ├── detector_node.py       # Simple example

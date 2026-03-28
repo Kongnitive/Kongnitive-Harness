@@ -1,7 +1,7 @@
 # Kongnitive ROS2 EdgeMCP Phase 1 Dependencies
 # Core MCP and ROS2
 fastmcp>=3.0.0
-rclpy>=3.0.0          # ROS2 Humble
+# rclpy is provided by ROS apt packages (e.g. ros-humble-rclpy), not PyPI.
 
 # System monitoring
 psutil>=5.9.0

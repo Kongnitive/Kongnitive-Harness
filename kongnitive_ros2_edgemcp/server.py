@@ -10,8 +10,9 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
+from kongnitive_ros2_edgemcp.core.episode_manager import EpisodeManager
 from kongnitive_ros2_edgemcp.core.node_manager import NodeManager
-from kongnitive_ros2_edgemcp.tools import system_tools, node_tools
+from kongnitive_ros2_edgemcp.tools import system_tools, node_tools, episode_tools
 from kongnitive_ros2_edgemcp.utils.config_loader import (
     get_config_dir,
     load_server_config,
@@ -22,7 +23,9 @@ CONFIG = load_server_config()
 SERVER_CONFIG = CONFIG.get("server", {})
 NODES_CONFIG = CONFIG.get("nodes", {})
 LOGGING_CONFIG = CONFIG.get("logging", {})
+EPISODE_CONFIG = CONFIG.get("episode", {})
 DEFAULT_LOG_LIMIT = int(LOGGING_CONFIG.get("default_limit", 100))
+DEFAULT_EPISODE_STRATEGY = str(EPISODE_CONFIG.get("default_strategy", "hardcoded_v1"))
 
 # Setup logging
 log_level_name = str(SERVER_CONFIG.get("log_level", "INFO")).upper()
@@ -38,6 +41,7 @@ mcp = FastMCP("Kongnitive-ROS2-EdgeMCP")
 
 # Initialize NodeManager
 node_manager = None
+episode_manager = None
 
 
 def get_node_manager() -> NodeManager:
@@ -50,6 +54,14 @@ def get_node_manager() -> NodeManager:
             executor_threads=int(CONFIG.get("ros2", {}).get("executor_threads", 0)),
         )
     return node_manager
+
+
+def get_episode_manager() -> EpisodeManager:
+    """Get or create EpisodeManager instance."""
+    global episode_manager
+    if episode_manager is None:
+        episode_manager = EpisodeManager()
+    return episode_manager
 
 
 # ============================================================================
@@ -347,6 +359,75 @@ async def ros_restart_node(node_name: str) -> dict:
     else:
         log_buffer.add("ERROR", f"Failed to restart node '{node_name}': {result.get('message')}", "system")
 
+    return result
+
+
+# ============================================================================
+# Episode / AI Iteration Tools
+# ============================================================================
+
+@mcp.tool()
+async def run_episode(seed: int, profile: dict = None, strategy: str = DEFAULT_EPISODE_STRATEGY) -> dict:
+    """
+    Run one reproducible pick-and-place episode.
+
+    Args:
+        seed: Random seed for deterministic replay
+        profile: Optional randomization profile overrides
+        strategy: Task strategy id (default: hardcoded_v1)
+
+    Returns:
+        Dict with EpisodeResult payload
+    """
+    em = get_episode_manager()
+    result = await episode_tools.run_episode(em, seed=seed, profile=profile, strategy=strategy)
+    log_buffer = system_tools.get_log_buffer()
+    if result.get("status") == "success":
+        summary = result.get("result", {})
+        log_buffer.add(
+            "INFO",
+            f"Episode run_id={summary.get('run_id')} seed={seed} success={summary.get('success')}",
+            "episode",
+        )
+    else:
+        log_buffer.add("ERROR", f"run_episode failed for seed={seed}", "episode")
+    return result
+
+
+@mcp.tool()
+async def get_metrics(run_id: str) -> dict:
+    """
+    Get metrics for a run_id plus aggregate summary over all runs.
+    """
+    em = get_episode_manager()
+    return await episode_tools.get_metrics(em, run_id=run_id)
+
+
+@mcp.tool()
+async def get_failure_trace(run_id: str) -> dict:
+    """
+    Get diagnostic trace for an episode run_id.
+    """
+    em = get_episode_manager()
+    return await episode_tools.get_failure_trace(em, run_id=run_id)
+
+
+@mcp.tool()
+async def patch_and_restart(node_name: str, code: str) -> dict:
+    """
+    Patch a node script and restart it with automatic rollback on failure.
+    """
+    nm = get_node_manager()
+    result = await episode_tools.patch_and_restart(nm, node_name=node_name, code=code)
+    log_buffer = system_tools.get_log_buffer()
+    if result.get("status") == "success":
+        log_buffer.add("INFO", f"patch_and_restart succeeded for '{node_name}'", "episode")
+    else:
+        log_buffer.add(
+            "ERROR",
+            f"patch_and_restart failed for '{node_name}', rolled_back={result.get('rolled_back')}",
+            "episode",
+        )
     return result
 
 
