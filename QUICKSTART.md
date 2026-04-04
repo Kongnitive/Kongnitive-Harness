@@ -217,7 +217,7 @@ wsl -d Ubuntu-22.04 cat /tmp/kongnitive-mcp.stderr.log
 在 Claude Code 中给出目标：
 
 ```
-目标：把 MuJoCo 场景中的红色方块移到桌子左边
+目标：把 MuJoCo 场景中的红色乐高移到桌子左边
 边界条件：不能碰撞其他物体
 
 请自主生成 ROS2 节点，热推执行，读取日志，迭代直到成功。

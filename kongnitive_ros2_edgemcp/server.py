@@ -6,6 +6,7 @@ FastMCP server that enables AI-driven hot-swapping of ROS2 nodes.
 
 import logging
 import sys
+from pathlib import Path
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -149,6 +150,9 @@ def create_node():
 - Log important events
 - Test incrementally
 - Monitor resource usage
+- Remember that scan is a robot motion primitive, not scene understanding
+- Inspect execution traces, not just top-level success flags
+- Reuse known-good node examples when available
 """
 
         content = load_system_prompt(default_prompt)
@@ -285,6 +289,74 @@ async def ros_get_node(node_name: str) -> dict:
     """
     nm = get_node_manager()
     return await node_tools.ros_get_node(nm, node_name)
+
+
+@mcp.tool()
+async def ros_get_successful_node_examples(goal_filter: str = "", limit: int = 5) -> dict:
+    """
+    Get successful ROS2 node examples from the current Kongnitive session.
+
+    A node counts as successful when its node_log contains an entry with:
+    - skill == "goal"
+    - success == True
+
+    Args:
+        goal_filter: Optional case-insensitive substring filter applied to node
+            name, script, and successful goal log entries
+        limit: Maximum number of examples to return
+
+    Returns:
+        Dict with matched example nodes including script, path, and success logs
+    """
+    from kongnitive_ros2_edgemcp.core.node_log import get_logs  # noqa: PLC0415
+
+    nm = get_node_manager()
+    script_dir = Path(nm.script_dir)
+    filt = (goal_filter or "").strip().lower()
+    examples: list[dict] = []
+
+    for script_path in sorted(script_dir.glob("*.py")):
+        node_name = script_path.stem
+        logs = get_logs(node_name, limit=200)
+        success_entries = [
+            entry for entry in logs
+            if entry.get("skill") == "goal" and entry.get("success") is True
+        ]
+        if not success_entries:
+            continue
+
+        script = script_path.read_text(encoding="utf-8")
+        haystacks = [node_name.lower(), script.lower()]
+        haystacks.extend(str(entry).lower() for entry in success_entries)
+        if filt and not any(filt in hay for hay in haystacks):
+            continue
+
+        last_success = success_entries[-1]
+        examples.append({
+            "node_name": node_name,
+            "script_path": str(script_path),
+            "script": script,
+            "success_count": len(success_entries),
+            "last_success": last_success,
+            "recent_logs": logs[-20:],
+        })
+
+    examples.sort(
+        key=lambda item: (
+            str(item["last_success"].get("t", "")),
+            item["success_count"],
+            item["node_name"],
+        ),
+        reverse=True,
+    )
+    examples = examples[: max(1, int(limit))]
+
+    return {
+        "status": "success",
+        "goal_filter": goal_filter,
+        "count": len(examples),
+        "examples": examples,
+    }
 
 
 @mcp.tool()

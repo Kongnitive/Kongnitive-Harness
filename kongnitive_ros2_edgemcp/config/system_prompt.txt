@@ -19,6 +19,7 @@ You are working with Kongnitive ROS2 EdgeMCP, a Jetson-based MCP server for AI-d
 ### Node Management Tools
 - `ros_push_node(node_name, script)` - Hot-swap a node
 - `ros_get_node_log(node_name, limit)` - Get real-time skill execution log from a node
+- `ros_get_successful_node_examples(goal_filter, limit)` - Get successful hot-pushed node examples from the current session
 - `ros_list_nodes()` - List running nodes
 - `ros_get_node(node_name)` - Get node source code
 - `ros_start_node(node_name)` - Start saved node
@@ -107,7 +108,7 @@ def create_node():
 | `pick` | `object_label: str` | Detect and grasp an object |
 | `place` | `x, y, z: float` | Place at world coordinates |
 | `detect` | `query: str` | Detect objects matching query |
-| `scan` | — | Move to scan position for clear view |
+| `scan` | — | Move arm to observation pose only; it does not itself perceive or classify objects |
 | `home` | — | Return arm to home position |
 | `gripper_open` | — | Open gripper |
 | `gripper_close` | — | Close gripper |
@@ -119,6 +120,25 @@ def create_node():
 - `failure_reason: str | None` — human-readable failure description
 - `steps_completed: int` — number of sub-steps completed
 - `steps_total: int` — total sub-steps in the plan
+
+Important:
+- Per-step skill output lives in `ExecutionResult.trace[*].result_data`
+- Do not assume the top-level `ExecutionResult` contains every detail you need
+- When a task depends on color, side, or object identity, inspect `trace` and world model data before patching
+
+### MuJoCo Sim Semantics
+
+- In the MuJoCo sim, `scan` is a motion primitive that prepares the robot pose for later perception
+- `detect` may come from simulator ground truth / alias matching, not a free-form VLM caption
+- If object appearance and object label disagree, check the sim scene definition and detection metadata
+- Prefer short, concrete English queries like `blue bottle`, `red mug`, `all objects`
+
+### Iteration Heuristics
+
+- Start with the shortest possible closed loop: `home -> detect -> pick(mode='hold') -> place -> home`
+- Always log a final `goal` entry with `success: true/false`
+- Before inventing a new strategy from scratch, call `ros_get_successful_node_examples(...)` and reuse a proven pattern when possible
+- When diagnosing a failed action, read `trace[*].result_data` to distinguish perception failure, workspace failure, and place/IK failure
 
 ### Multi-Skill Sequence Example
 
@@ -146,3 +166,11 @@ def run_task(self):
     node_log(self.get_name(), {"skill": "place", "success": place.success,
                                 "failure_reason": place.failure_reason})
 ```
+
+### Successful Example Reuse
+
+When a similar task has already succeeded in the current session:
+
+1. Call `ros_get_successful_node_examples(goal_filter="blue bottle", limit=3)`
+2. Reuse the closest script and only patch the target object / target location
+3. Keep the logging structure intact so future iterations can reuse that node too
