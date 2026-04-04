@@ -413,6 +413,39 @@ async def get_failure_trace(run_id: str) -> dict:
 
 
 @mcp.tool()
+async def ros_get_node_log(node_name: str, limit: int = 50) -> dict:
+    """
+    Get real-time execution log for a running node.
+
+    Each entry is one skill execution result reported by the node via node_log().
+    Entries include: skill name, success/failure, failure reason, timestamp.
+
+    Call this after ros_push_node to observe what the node is doing and whether
+    it is achieving the goal. Logs are cleared automatically when a node is
+    hot-replaced, so you only see output from the current version.
+
+    Args:
+        node_name: Node identifier (same name used in ros_push_node)
+        limit: Max number of recent log entries to return (default 50)
+
+    Returns:
+        Dict with:
+        - status: "success"
+        - node_name: the queried node
+        - count: number of entries returned
+        - entries: list of log dicts, ordered oldest-first
+    """
+    from kongnitive_ros2_edgemcp.core.node_log import get_logs  # noqa: PLC0415
+    entries = get_logs(node_name, limit=limit)
+    return {
+        "status": "success",
+        "node_name": node_name,
+        "count": len(entries),
+        "entries": entries,
+    }
+
+
+@mcp.tool()
 async def patch_and_restart(node_name: str, code: str) -> dict:
     """
     Patch a node script and restart it with automatic rollback on failure.
@@ -448,6 +481,15 @@ def main():
         # Log startup
         log_buffer = system_tools.get_log_buffer()
         log_buffer.add("INFO", "Kongnitive ROS2 EdgeMCP server starting", "system")
+
+        # Pre-warm vector-os-nano MuJoCo agent (reduces first-call latency)
+        try:
+            from kongnitive_ros2_edgemcp.core.vector_bridge import get_agent  # noqa: PLC0415
+            get_agent()
+            logger.info("vector-os-nano MuJoCo agent ready")
+            log_buffer.add("INFO", "vector-os-nano MuJoCo agent ready", "system")
+        except ImportError:
+            logger.warning("vector-os-nano not installed — sim tools unavailable")
 
         # Run FastMCP server
         mcp.run(transport="stdio")

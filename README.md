@@ -1,330 +1,249 @@
 # Kongnitive ROS2 EdgeMCP
 
-**AI-Driven Hot-Swapping of ROS2 Nodes on Jetson**
+**AI 自主迭代机器人控制系统 — 热推 ROS2 节点 + MuJoCo 真实仿真反馈**
 
-Kongnitive ROS2 EdgeMCP is a FastMCP server that enables AI to push, reload, and manage ROS2 nodes dynamically without system restart. Built for Jetson platforms, it extends the EdgeMCP concept (proven on ESP32 with Lua) to ROS2 with Python.
+给 AI 一个目标和边界条件，AI 自主生成 ROS2 控制节点、热推部署、读取 MuJoCo 物理仿真反馈、分析失败原因、迭代改进——全程无人参与，无需 build，无需重启。
 
-## Problem Solved
+## 核心理念
 
-Traditional ROS2 development requires recompilation and redeployment for every change (5-20 min/iteration). Remote debugging and fixing production robots is difficult. Kongnitive ROS2 EdgeMCP enables:
+> **代码即行动，热推即部署，反馈即学习。**
 
-- **Hot-swap nodes in <100ms** - AI pushes Python scripts that reload instantly
-- **Autonomous iteration** - AI reads logs, analyzes issues, pushes fixes, verifies
-- **Remote robot management** - Fix production robots without physical access
-- **Rapid prototyping** - Test ideas in seconds, not minutes
+传统 ROS2 开发：修改代码 → 编译 → 重启 → 验证（5-20 分钟/轮）
 
-## Architecture
+Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代（< 5 秒/轮）
+
+## 整体架构
 
 ```
-┌─────────────────────────────────────────────┐
-│           AI (Claude via MCP)               │
-└─────────────────┬───────────────────────────┘
-                  │ MCP Tools
-┌─────────────────▼───────────────────────────┐
-│         FastMCP Server (stdio)              │
-│  ┌──────────────────────────────────────┐   │
-│  │  9 Core Tools (Phase 1)              │   │
-│  │  - get_status                        │   │
-│  │  - get_system_prompt                 │   │
-│  │  - sys_get_logs                      │   │
-│  │  - ros_push_node (hot-swap!)         │   │
-│  │  - ros_list_nodes                    │   │
-│  └──────────────────────────────────────┘   │
-└─────────────────┬───────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────┐
-│          NodeManager                        │
-│  - Dynamic Python import (importlib)        │
-│  - MultiThreadedExecutor                    │
-│  - Script storage & lifecycle               │
-└─────────────────┬───────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────┐
-│      Hot-Swappable ROS2 Nodes               │
-│  - Detector, Planner, Controller, etc.      │
-│  - <100ms reload time                       │
-│  - Zero-downtime switchover                 │
-└─────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Claude (AI Agent)                         │
+│  目标："把红色方块放到桌子左边，不能碰撞"                      │
+└───────────┬─────────────────────────────────────────────────┘
+            │ MCP (stdio)
+            ▼
+┌─────────────────────────────────────────────────────────────┐
+│              kongnitive FastMCP Server                       │
+│                                                              │
+│  ┌──────────────────┐   ┌───────────────────────────────┐   │
+│  │   MCP Tools      │   │      NodeManager              │   │
+│  │                  │   │  (rclpy MultiThreadedExecutor)│   │
+│  │ ros_push_node ───┼──►│   热推/卸载 ROS2 节点         │   │
+│  │ ros_get_node_log─┼──►│   NodeLogStore (per-node log) │   │
+│  │ patch_and_restart│   └───────────┬───────────────────┘   │
+│  │ ros_list_nodes   │               │ executor spin          │
+│  │ get_status       │               ▼                        │
+│  └──────────────────┘      ┌────────────────────┐           │
+│                             │  AI 生成的 ROS2 节点│           │
+│                             │  (每次迭代不同)     │           │
+│                             │  execute_skill(...) │           │
+│                             │  node_log(result)  │           │
+│                             └────────┬───────────┘           │
+└──────────────────────────────────────┼───────────────────────┘
+                                       │ Python import (同进程)
+                                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│              vector-os-nano (纯 Python 库)                   │
+│                                                              │
+│  VectorBridge.get_agent()  ← 单例，进程级共享               │
+│  Agent.execute_skill(name, params)                           │
+│  MuJoCoArm + MuJoCoGripper + MuJoCoPerception               │
+│  MuJoCo Physics Engine → 真实物理结果 (success/failure)      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Quick Start
+## AI 自主迭代闭环
 
-### Prerequisites
+```
+输入：目标 + 边界条件
+        │
+        ▼
+  AI 生成节点代码  ← 策略：扫描→检测→抓取→放置
+        │ ros_push_node(name, script)
+        ▼
+  节点热推加载     ← <100ms 零停机
+        │ executor 运行
+        ▼
+  节点执行技能     ← agent.execute_skill() → MuJoCo 真实物理
+  写入执行日志     ← node_log(result)
+        │ ros_get_node_log(name)
+        ▼
+  AI 分析结果
+        │
+   ┌────┴────┐
+   ▼         ▼
+达到目标   未达到目标
+  结束     patch_and_restart → 回到"热推加载"
+```
 
-- Ubuntu 20.04/22.04
-- ROS2 Humble (LTS)
-- Python 3.8+
-- JetPack 5.0+ (for Jetson)
+## 快速开始
 
-### Installation
+### 前置条件
+
+- Python 3.10+
+- ROS2 Humble（Linux/WSL2）
+- [vector-os-nano](https://github.com/vector-robotics/vector-os-nano)（提供 MuJoCo 仿真）
+
+### 安装
 
 ```bash
-# Clone repository
-cd ~/ros2_ws/src
+# 克隆仓库
 git clone https://github.com/kongnitive/kongnitive-ros2-edgemcp.git
 cd kongnitive-ros2-edgemcp
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Install package
+# 安装依赖
 pip install -e .
+
+# 安装 vector-os-nano（MuJoCo 仿真支持）
+pip install -e /path/to/vector-os-nano[sim]
 ```
 
-### Running the Server
+### 启动服务
 
 ```bash
-# Start Kongnitive ROS2 EdgeMCP server
-kongnitive-ros2-edgemcp
-
-# Or run directly
 python -m kongnitive_ros2_edgemcp.server
+# 输出: vector-os-nano MuJoCo agent ready
 ```
 
-### Recommended First Run (Single Robot)
+### 配置 Claude Code MCP
 
-```powershell
-Set-Location D:\Projects\edgemcp\kongnitive-ros2-edgemcp
-.\scripts\start_gazebo_host.ps1 -LaunchCommand "ros2 launch my_pick_place_sim tabletop.launch.py" -RosDomainId 0 -WslDistro Ubuntu-22.04
-.\scripts\start_single_robot_edgemcp.ps1 -RosDomainId 0
+在项目根目录创建或更新 `.mcp.json`：
+
+```json
+{
+  "mcpServers": {
+    "kongnitive": {
+      "command": "python",
+      "args": ["-m", "kongnitive_ros2_edgemcp.server"]
+    }
+  }
+}
 ```
 
-Single-robot deployment files:
-- `deploy/single_robot/docker-compose.single-robot.yml`
-- `deploy/single_robot/config/server_config.yaml`
+## MCP 工具列表
 
-### Testing Hot-Swap
+### 系统工具
 
-```python
-# In another terminal, use MCP client to push a node
-# (Example using Claude Desktop or other MCP client)
+| 工具 | 说明 |
+|------|------|
+| `get_status()` | CPU、内存、磁盘、温度、ROS 节点状态 |
+| `get_system_prompt()` | 获取 AI 操作指引 |
+| `sys_get_logs(filter, level, source, limit)` | 过滤系统日志 |
 
-# 1. Get system status
-await get_status()
+### 节点管理
 
-# 2. Push detector node
-script = open('examples/detector_node.py').read()
-await ros_push_node('detector', script)
+| 工具 | 说明 |
+|------|------|
+| `ros_push_node(node_name, script)` | **热推 ROS2 节点（核心工具）** |
+| `ros_get_node_log(node_name, limit)` | **读取节点实时执行日志** |
+| `ros_list_nodes()` | 列出运行中的节点 |
+| `ros_get_node(node_name)` | 获取节点当前源码 |
+| `ros_start_node(node_name)` | 启动已保存的节点 |
+| `ros_stop_node(node_name)` | 停止节点 |
+| `ros_restart_node(node_name)` | 重启节点 |
+| `patch_and_restart(node_name, code)` | 打补丁并重启（失败自动回滚） |
 
-# 3. Verify it's running
-await ros_list_nodes()
+### AI 迭代工具
 
-# 4. Check logs
-await sys_get_logs(filter='detector')
+| 工具 | 说明 |
+|------|------|
+| `run_episode(seed, profile, strategy)` | 运行可复现的仿真 episode |
+| `get_metrics(run_id)` | 获取 episode 指标和聚合统计 |
+| `get_failure_trace(run_id)` | 获取 episode 阶段级失败诊断 |
 
-# 5. Hot-reload with modified script
-# Edit detect() method in script
-await ros_push_node('detector', modified_script)
-# Node reloads in <100ms!
-```
+## 节点脚本模板
 
-## Node Script Template
-
-Every AI-pushed node must follow this pattern:
+所有 AI 生成的机器人控制节点必须遵循此模式：
 
 ```python
 import rclpy
 from rclpy.node import Node
+from kongnitive_ros2_edgemcp.core.vector_bridge import get_agent
+from kongnitive_ros2_edgemcp.core.node_log import node_log
 
-class MyNode(Node):
+class MyStrategyNode(Node):
     def __init__(self):
-        super().__init__('my_node')
-        # Your initialization here
+        super().__init__('my_strategy')
+        self.agent = get_agent()          # 共享 MuJoCo Agent（单例）
+        self.timer = self.create_timer(3.0, self.run_task)
+
+    def run_task(self):
+        result = self.agent.execute_skill("pick", {"object_label": "red_cube"})
+
+        # 必须上报 — AI 通过 ros_get_node_log 读取
+        node_log(self.get_name(), {
+            "skill": "pick",
+            "success": result.success,
+            "failure_reason": result.failure_reason,
+        })
 
 def create_node():
-    """Required factory function"""
-    return MyNode()
+    return MyStrategyNode()
 ```
 
-See `examples/` for complete examples.
+可用技能：`pick` / `place` / `detect` / `scan` / `home` / `gripper_open` / `gripper_close`
 
-## MCP Tools (Phase 1 + Episode Loop)
+完整示例见 `examples/vector_sim_demo_node.py`。
 
-### System Tools
+## 热推机制
 
-- **get_status()** - CPU, memory, disk, temperature, ROS nodes
-- **get_system_prompt()** - AI instructions for this project
-- **sys_get_logs(filter, level, source, limit)** - Filtered log retrieval
-
-### Node Management
-
-- **ros_push_node(node_name, script)** - Hot-swap a node
-- **ros_list_nodes()** - List running nodes
-- **ros_get_node(node_name)** - Get node source code
-- **ros_start_node(node_name)** - Start saved node
-- **ros_stop_node(node_name)** - Stop running node
-- **ros_restart_node(node_name)** - Restart node
-
-### Episode / AI Iteration
-
-- **run_episode(seed, profile, strategy)** - Run reproducible pick-and-place episode
-- **get_metrics(run_id)** - Return per-run metrics + aggregate success/failure summary
-- **get_failure_trace(run_id)** - Return stage-level failure diagnostics
-- **patch_and_restart(node_name, code)** - Hot-patch node with automatic rollback
-
-## AI Workflow
-
-1. **Understand** - `get_status()` shows system state
-2. **Diagnose** - `sys_get_logs()` reveals issues
-3. **Fix** - `ros_push_node()` deploys updated code
-4. **Verify** - Check `ros_list_nodes()` and logs
-5. **Iterate** - Repeat until working
-
-## Gazebo + MoveIt2 Integration Direction
-
-This repository now exposes a deterministic episode API for AI self-iteration.
-Use Gazebo (`ros_gz`) + MoveIt2 + `ros2_control` as the primary stack:
-
-1. Build tabletop world (table, objects, obstacles, camera, force/torque)
-2. Connect robot model via URDF/Xacro and `ros2_control`
-3. Keep planning/control baseline stable in MoveIt2
-4. Put editable logic (perception/decision/recovery) in hot-swappable nodes
-5. Drive evaluation through `run_episode` + `get_failure_trace` + `patch_and_restart`
-
-## Hot-Swap Mechanism
-
-```python
-# NodeManager hot-swap process:
-1. Save script to ~/.kongnitive_ros2_edgemcp/nodes/
-2. Unload old node (if exists)
-3. Dynamic import via importlib
-4. Create node instance
-5. Add to MultiThreadedExecutor
-6. ROS2 topics auto-reconnect
-# Total time: <100ms
+```
+NodeManager.push_node() 执行流程：
+  1. 保存脚本到 ~/.kongnitive_ros2_edgemcp/nodes/
+  2. 卸载旧节点（如存在）
+  3. importlib 动态加载新模块
+  4. 调用 create_node() 创建实例
+  5. 添加到 MultiThreadedExecutor
+  6. 清空旧日志（AI 只看新版本结果）
+  总耗时：< 100ms
 ```
 
-## Project Structure
+## 项目结构
 
 ```
 kongnitive-ros2-edgemcp/
 ├── kongnitive_ros2_edgemcp/
-│   ├── server.py              # FastMCP server entry point
+│   ├── server.py                  # FastMCP 服务入口
 │   ├── core/
-│   │   ├── node_manager.py    # Hot-swap engine
-│   │   └── episode_manager.py # Reproducible episode loop
+│   │   ├── node_manager.py        # 热推引擎
+│   │   ├── node_log.py            # 节点执行日志 store
+│   │   ├── vector_bridge.py       # vector-os-nano Agent 单例
+│   │   └── episode_manager.py     # 可复现 episode 循环
 │   ├── tools/
-│   │   ├── system_tools.py    # System monitoring
-│   │   ├── node_tools.py      # Node management
-│   │   └── episode_tools.py   # Episode + patch loop tools
-│   └── ...
+│   │   ├── system_tools.py        # 系统监控
+│   │   ├── node_tools.py          # 节点管理
+│   │   └── episode_tools.py       # Episode + patch 工具
+│   └── config/
+│       ├── server_config.yaml
+│       └── system_prompt.txt
 ├── examples/
-│   ├── detector_node.py       # Simple example
-│   └── planner_node.py        # Advanced example
-├── config/
-│   ├── server_config.yaml
-│   └── system_prompt.txt
-├── requirements.txt
-├── setup.py
+│   ├── vector_sim_demo_node.py    # MuJoCo 仿真控制示例（推荐起点）
+│   └── detector_node.py           # 基础节点示例
 └── README.md
 ```
 
-## Development Phases
+## 性能指标
 
-### ✅ Phase 1 (Current) - MVP
-- Core hot-swap capability
-- 5 essential MCP tools
-- System monitoring
-- Log management
-- Example nodes
+| 指标 | 目标 |
+|------|------|
+| 节点热推时间 | < 100ms ✅ |
+| 工具响应时间 | < 500ms |
+| 并发节点数 | 10+ |
 
-### 🔄 Phase 2 (Next) - ROS Communication
-- Topic tools (list, echo, pub, info)
-- Service tools (list, call)
-- Action tools (list, send_goal)
-- Enhanced node management
+## 故障排查
 
-### 📋 Phase 3 (Later) - GPU Integration
-- TensorRT model management
-- Model hot-swapping
-- Inference tools
-- Performance profiling
+**节点加载失败**
+- 确认脚本定义了 `create_node()` 函数
+- 确认 `create_node()` 返回 `rclpy.node.Node` 实例
+- 查看日志：`sys_get_logs(filter="error")`
 
-### 📋 Phase 4 (Future) - Multi-Device
-- mDNS device discovery
-- Remote node deployment
-- Fleet management
+**MuJoCo Agent 未就绪**
+- 确认已安装 `vector-os-nano[sim]`：`pip install -e /path/to/vector-os-nano[sim]`
+- 服务启动日志应包含 `vector-os-nano MuJoCo agent ready`
 
-## Performance Targets
-
-- Node hot-swap time: <100ms ✅
-- Tool response time: <500ms
-- Memory overhead: <200MB
-- CPU usage (idle): <5%
-- Support 5+ concurrent nodes
-
-## Testing
-
-```bash
-# Run tests
-pytest tests/
-
-# Test hot-swap manually
-python examples/detector_node.py
-```
-
-## Configuration
-
-Edit `config/server_config.yaml`:
-
-```yaml
-nodes:
-  script_dir: "~/.kongnitive_ros2_edgemcp/nodes"
-  max_nodes: 10
-
-logging:
-  buffer_size: 1000
-  default_limit: 100
-```
-
-Config loading priority:
-1. `KONGNITIVE_CONFIG_DIR` (if set)
-2. `config/` in repository root
-3. packaged default config (`kongnitive_ros2_edgemcp/config/`)
-
-## Troubleshooting
-
-### Node won't load
-- Check script has `create_node()` function
-- Verify imports are correct
-- Check for syntax errors
-- Review logs: `sys_get_logs(filter='error')`
-
-### Hot-swap fails
-- Ensure ROS2 is initialized
-- Check script directory permissions
-- Verify node name is unique
-
-### Performance issues
-- Monitor with `get_status()`
-- Check CPU/memory usage
-- Reduce number of concurrent nodes
-
-## Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new features
-4. Submit a pull request
+**ros_get_node_log 返回空**
+- 节点脚本中必须调用 `node_log()` 上报结果
+- 等待至少一个 timer 周期（默认 3s）后再读取
 
 ## License
 
 MIT License
-
-## Acknowledgments
-
-- Built on FastMCP framework
-- Inspired by EdgeMCP (ESP32/Lua)
-- Powered by ROS2 Humble
-
-## Contact
-
-- GitHub: https://github.com/kongnitive/kongnitive-ros2-edgemcp
-- Issues: https://github.com/kongnitive/kongnitive-ros2-edgemcp/issues
-
----
-
-**Status**: Phase 1 MVP Complete ✅
-
-**Next**: Phase 2 - ROS Communication Tools

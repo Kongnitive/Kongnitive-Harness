@@ -18,11 +18,13 @@ You are working with Kongnitive ROS2 EdgeMCP, a Jetson-based MCP server for AI-d
 
 ### Node Management Tools
 - `ros_push_node(node_name, script)` - Hot-swap a node
+- `ros_get_node_log(node_name, limit)` - Get real-time skill execution log from a node
 - `ros_list_nodes()` - List running nodes
 - `ros_get_node(node_name)` - Get node source code
 - `ros_start_node(node_name)` - Start saved node
 - `ros_stop_node(node_name)` - Stop running node
 - `ros_restart_node(node_name)` - Restart node
+- `patch_and_restart(node_name, code)` - Patch node code with automatic rollback on failure
 
 ## Node Script Requirements
 
@@ -48,3 +50,99 @@ Not yet implemented:
 - GPU/TensorRT tools
 - Device discovery
 - System reboot
+
+---
+
+## MuJoCo Simulation Integration
+
+A vector-os-nano MuJoCo simulation agent is available in this process.
+Use it to execute real robot skills and get genuine success/failure feedback.
+
+### Autonomous Iteration Workflow
+
+```
+Give goal + constraints → generate node → ros_push_node
+→ wait 3-5s → ros_get_node_log → analyse → patch_and_restart → repeat
+```
+
+### Node Script Template
+
+Every node that controls the robot MUST use this pattern:
+
+```python
+import rclpy
+from rclpy.node import Node
+from kongnitive_ros2_edgemcp.core.vector_bridge import get_agent
+from kongnitive_ros2_edgemcp.core.node_log import node_log
+
+class MyStrategyNode(Node):
+    def __init__(self):
+        super().__init__('my_strategy')
+        self.agent = get_agent()          # shared MuJoCo agent (singleton)
+        self.timer = self.create_timer(3.0, self.run_task)
+        self.get_logger().info('Node ready')
+
+    def run_task(self):
+        # Implement your strategy here — this is what the AI iterates on
+        result = self.agent.execute_skill("pick", {"object_label": "red_cube"})
+
+        # MUST report result — AI reads this via ros_get_node_log
+        node_log(self.get_name(), {
+            "skill": "pick",
+            "success": result.success,
+            "status": result.status,
+            "failure_reason": result.failure_reason,
+            "steps_completed": result.steps_completed,
+            "steps_total": result.steps_total,
+        })
+
+def create_node():
+    return MyStrategyNode()
+```
+
+### Available Skills
+
+| Skill | Key Params | Description |
+|-------|-----------|-------------|
+| `pick` | `object_label: str` | Detect and grasp an object |
+| `place` | `x, y, z: float` | Place at world coordinates |
+| `detect` | `query: str` | Detect objects matching query |
+| `scan` | — | Move to scan position for clear view |
+| `home` | — | Return arm to home position |
+| `gripper_open` | — | Open gripper |
+| `gripper_close` | — | Close gripper |
+
+### ExecutionResult Fields (from execute_skill)
+
+- `success: bool` — whether the skill succeeded
+- `status: str` — "completed" | "failed" | "chat"
+- `failure_reason: str | None` — human-readable failure description
+- `steps_completed: int` — number of sub-steps completed
+- `steps_total: int` — total sub-steps in the plan
+
+### Multi-Skill Sequence Example
+
+```python
+def run_task(self):
+    # Step 1: scan to get clear view
+    self.agent.execute_skill("scan", {})
+
+    # Step 2: detect target
+    det = self.agent.execute_skill("detect", {"query": "red cube"})
+    node_log(self.get_name(), {"skill": "detect", "success": det.success,
+                                "failure_reason": det.failure_reason})
+    if not det.success:
+        return
+
+    # Step 3: pick
+    pick = self.agent.execute_skill("pick", {"object_label": "red cube"})
+    node_log(self.get_name(), {"skill": "pick", "success": pick.success,
+                                "failure_reason": pick.failure_reason})
+    if not pick.success:
+        return
+
+    # Step 4: place
+    place = self.agent.execute_skill("place", {"x": -0.2, "y": 0.0, "z": 0.05})
+    node_log(self.get_name(), {"skill": "place", "success": place.success,
+                                "failure_reason": place.failure_reason})
+```

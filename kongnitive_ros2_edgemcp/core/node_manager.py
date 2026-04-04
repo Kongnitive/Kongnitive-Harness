@@ -152,6 +152,13 @@ class NodeManager:
                 # 5. Add to executor (hot-swap!)
                 self.executor.add_node(node_instance)
 
+                # Clear stale logs so AI only sees output from this version
+                try:
+                    from kongnitive_ros2_edgemcp.core.node_log import clear_logs  # noqa: PLC0415
+                    clear_logs(node_name)
+                except Exception:
+                    pass
+
                 # Register
                 self.nodes[node_name] = {
                     'instance': node_instance,
