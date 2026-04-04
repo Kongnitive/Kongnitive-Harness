@@ -71,7 +71,9 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 
 如果启用可视化，Windows 桌面会弹出 MuJoCo 仿真窗口。
 
-## 4) 配置 Claude Code
+## 4) 配置 Claude Code / Codex
+
+### Claude Code
 
 在项目根目录（Windows 侧）创建 `.mcp.json`：
 
@@ -107,6 +109,108 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 ```
 
 重启 Claude Code 后，MCP 工具会自动加载。
+
+### Codex
+
+当前 Codex 已公开文档和 CLI 可直接确认的 MCP 配置方式，是共享配置：
+
+- `codex mcp add ...`
+- `~/.codex/config.toml` 下的 `[mcp_servers.<name>]`
+
+如果你在 Codex 里执行 `/mcp`，显示 `No MCP servers configured`，通常说明 Codex **没有识别到该配置**。  
+目前不要使用下面这种“项目作用域 MCP”写法，因为当前版本下它不会被 `/mcp` 识别：
+
+```toml
+[projects.'D:\Projects\edgemcp\kongnitive-ros2-edgemcp'.mcp_servers.kongnitive]
+```
+
+建议先使用 Codex 当前可识别的标准写法，在 `~/.codex/config.toml` 中添加：
+
+```toml
+[mcp_servers.kongnitive]
+command = "wsl"
+args = [
+  "-d", "Ubuntu-22.04",
+  "bash", "-c",
+  "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python3 -m kongnitive_ros2_edgemcp.server"
+]
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+```
+
+**带可视化版本**：
+
+```toml
+[mcp_servers.kongnitive]
+command = "wsl"
+args = [
+  "-d", "Ubuntu-22.04",
+  "bash", "-c",
+  "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && MUJOCO_HEADLESS=0 python3 -m kongnitive_ros2_edgemcp.server"
+]
+startup_timeout_sec = 20
+tool_timeout_sec = 120
+```
+
+或者直接用 CLI 添加：
+
+```powershell
+codex mcp add kongnitive -- wsl -d Ubuntu-22.04 bash -c "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python3 -m kongnitive_ros2_edgemcp.server"
+```
+
+添加后可验证：
+
+```powershell
+codex mcp list
+```
+
+如果这里能看到 `kongnitive`，Codex 里的 `/mcp` 才会显示它。
+
+### 关于“只在特定目录生效”
+
+当前能确认的官方写法是共享 MCP 配置，没有看到 Codex 官方文档提供“按目录自动启用 MCP server”的配置格式。  
+也就是说，**当前版本更稳妥的结论是：Codex MCP 先按全局共享配置处理，不要依赖目录级 `mcp_servers` 自动生效。**
+
+如果你必须做隔离，现实可行的做法一般是：
+
+- 为不同项目使用不同的 server 名称，按需启用/删除
+- 用不同的 Codex 配置环境或不同系统用户隔离
+- 先保留全局 MCP，再在项目里的 `AGENTS.md` 约束何时使用它
+
+### Codex 闪退 / 日志排查
+
+如果 MCP server 启动后立刻消失，优先看 Codex 自己的日志：
+
+```powershell
+Get-Content "$env:USERPROFILE\.codex\log\codex-tui.log" -Tail 200
+```
+
+常见关键字：
+
+- `Failed to read MCP server stderr`
+- `stream did not contain valid UTF-8`
+- `startup timeout`
+- `failed to spawn`
+
+如果要确认到底是服务本身退出，还是被 Codex 判定为异常，直接在 PowerShell 手工跑同一条命令：
+
+```powershell
+wsl -d Ubuntu-22.04 bash -lc "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1; source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python3 -m kongnitive_ros2_edgemcp.server"
+```
+
+如果想保留启动报错，避免窗口一闪而过，可把 stderr 落盘到 WSL 文件：
+
+```powershell
+wsl -d Ubuntu-22.04 bash -lc "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1; source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python3 -m kongnitive_ros2_edgemcp.server 2>/tmp/kongnitive-mcp.stderr.log"
+```
+
+然后查看：
+
+```powershell
+wsl -d Ubuntu-22.04 cat /tmp/kongnitive-mcp.stderr.log
+```
+
+如果日志里出现 `stream did not contain valid UTF-8`，通常说明服务往 stderr 打了非 UTF-8 内容。上面的 `LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1` 一般能解决；若仍存在，就需要继续排查是哪个依赖在输出异常编码。
 
 ## 5) 第一个 AI 迭代 Demo
 
