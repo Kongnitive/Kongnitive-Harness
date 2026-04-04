@@ -24,7 +24,8 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         "fastmcp>=3.0.0",
-        "rclpy>=3.0.0",
+        # rclpy is installed via ROS2 (apt install ros-humble-rclpy),
+        # not through pip. NodeManager handles missing rclpy gracefully.
         "psutil>=5.9.0",
         "pyyaml>=6.0",
     ],

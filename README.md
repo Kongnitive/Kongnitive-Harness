@@ -79,45 +79,91 @@ Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代�
 
 ### 前置条件
 
+- **Windows 11** 或 Windows 10 22H2+（WSLg GUI 支持）
+- **WSL2** with Ubuntu 22.04
+- **ROS2 Humble** 已安装在 WSL2 内
 - Python 3.10+
-- ROS2 Humble（Linux/WSL2）
 - [vector-os-nano](https://github.com/vector-robotics/vector-os-nano)（提供 MuJoCo 仿真）
 
 ### 安装
 
 ```bash
-# 克隆仓库
-git clone https://github.com/kongnitive/kongnitive-ros2-edgemcp.git
-cd kongnitive-ros2-edgemcp
+# 进入 WSL2
+wsl -d Ubuntu-22.04
 
-# 安装依赖
+# 安装 OpenGL 支持（MuJoCo 可视化需要）
+sudo apt update
+sudo apt install -y mesa-utils libgl1-mesa-glx
+
+# 验证 ROS2
+source /opt/ros/humble/setup.bash
+ros2 topic list
+
+# 安装 vector-os-nano（MuJoCo 仿真）
+pip install -e /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp/vector-os-nano[sim]
+
+# 安装 kongnitive
+cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
 pip install -e .
-
-# 安装 vector-os-nano（MuJoCo 仿真支持）
-pip install -e /path/to/vector-os-nano[sim]
 ```
 
 ### 启动服务
 
 ```bash
+# 在 WSL2 内执行
+source /opt/ros/humble/setup.bash
+
+# 方式 1: 无头模式（默认，更快）
 python -m kongnitive_ros2_edgemcp.server
-# 输出: vector-os-nano MuJoCo agent ready
+
+# 方式 2: 带可视化（MuJoCo 窗口显示在 Windows 桌面）
+MUJOCO_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server
 ```
+
+启动成功输出：
+```
+INFO - vector-os-nano MuJoCo agent ready
+INFO - Starting Kongnitive ROS2 EdgeMCP server...
+```
+
+如果启用可视化，Windows 桌面会弹出 MuJoCo 仿真窗口。
 
 ### 配置 Claude Code MCP
 
-在项目根目录创建或更新 `.mcp.json`：
+在项目根目录（Windows 侧）创建或更新 `.mcp.json`：
 
 ```json
 {
   "mcpServers": {
     "kongnitive": {
-      "command": "python",
-      "args": ["-m", "kongnitive_ros2_edgemcp.server"]
+      "command": "wsl",
+      "args": [
+        "-d", "Ubuntu-22.04",
+        "bash", "-c",
+        "source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python -m kongnitive_ros2_edgemcp.server"
+      ]
     }
   }
 }
 ```
+
+**带可视化版本**（调试时推荐）：
+```json
+{
+  "mcpServers": {
+    "kongnitive": {
+      "command": "wsl",
+      "args": [
+        "-d", "Ubuntu-22.04",
+        "bash", "-c",
+        "source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && MUJOCO_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server"
+      ]
+    }
+  }
+}
+```
+
+重启 Claude Code 后，MCP 工具会自动加载。
 
 ## MCP 工具列表
 

@@ -39,5 +39,7 @@ def get_agent():
         if _agent is not None:
             return _agent
         from vector_os_nano.mcp.server import create_sim_agent  # noqa: PLC0415
-        _agent = create_sim_agent(headless=True)
+        import os
+        headless = os.environ.get("MUJOCO_HEADLESS", "1") == "1"
+        _agent = create_sim_agent(headless=headless)
     return _agent
