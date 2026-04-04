@@ -156,6 +156,7 @@ class DetectSkill:
                 confidence=det.confidence,
                 state="on_table",
                 last_seen=now,
+                properties=dict(getattr(det, "properties", {}) or {}),
             )
             context.world_model.add_object(obj)
 
@@ -164,7 +165,11 @@ class DetectSkill:
                 "label": det.label,
                 "confidence": round(det.confidence, 4),
                 "has_3d": has_3d,
+                "properties": dict(getattr(det, "properties", {}) or {}),
             }
+            color = summary["properties"].get("color")
+            if color:
+                summary["color"] = color
             if has_3d:
                 summary["position_cm"] = [round(x * 100, 1), round(y * 100, 1), round(z * 100, 1)]
             object_summaries.append(summary)

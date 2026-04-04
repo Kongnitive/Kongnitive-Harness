@@ -142,12 +142,14 @@ class Detection:
     label: str
     bbox: tuple[float, float, float, float]
     confidence: float = 1.0
+    properties: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "label": self.label,
             "bbox": self.bbox,
             "confidence": self.confidence,
+            "properties": dict(self.properties),
         }
 
     @classmethod
@@ -166,6 +168,7 @@ class Detection:
             label=str(d["label"]),
             bbox=bbox,
             confidence=float(d.get("confidence", 1.0)),
+            properties=dict(d.get("properties", {})),
         )
 
 

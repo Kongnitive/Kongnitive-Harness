@@ -26,14 +26,32 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Object name → friendly labels for natural language matching
-_OBJECT_ALIASES: dict[str, list[str]] = {
-    "banana": ["banana", "香蕉", "黄色", "黄"],
-    "mug": ["mug", "cup", "杯子", "杯", "马克杯", "红色", "红"],
-    "bottle": ["bottle", "瓶子", "瓶", "蓝色", "蓝", "水瓶"],
-    "screwdriver": ["screwdriver", "螺丝刀", "起子", "绿色", "绿"],
-    "duck": ["duck", "鸭子", "小鸭", "橙色", "橙", "玩具"],
-    "lego": ["lego", "积木", "乐高", "白色", "白", "方块"],
+# Object name → semantic metadata used by simulated perception.
+_OBJECT_METADATA: dict[str, dict[str, Any]] = {
+    "banana": {
+        "aliases": ["banana", "香蕉", "yellow", "黄色", "yellow object", "黄"],
+        "color": "yellow",
+    },
+    "mug": {
+        "aliases": ["mug", "cup", "杯子", "杯", "马克杯", "red", "红色", "red object", "红"],
+        "color": "red",
+    },
+    "bottle": {
+        "aliases": ["bottle", "瓶子", "瓶", "blue", "蓝色", "blue object", "蓝", "water bottle"],
+        "color": "blue",
+    },
+    "screwdriver": {
+        "aliases": ["screwdriver", "螺丝刀", "起子", "green", "绿色", "green object", "绿"],
+        "color": "green",
+    },
+    "duck": {
+        "aliases": ["duck", "鸭子", "小鸭", "gourd", "葫芦", "orange", "橙色", "orange object", "橙", "toy"],
+        "color": "orange",
+    },
+    "lego": {
+        "aliases": ["lego", "积木", "乐高", "red", "红色", "red object", "红", "block"],
+        "color": "red",
+    },
 }
 
 # Simulated camera parameters (matches overhead camera in MJCF)
@@ -89,7 +107,8 @@ class MuJoCoPerception:
         results: list[Detection] = []
 
         for obj_name, pos in objs.items():
-            aliases = _OBJECT_ALIASES.get(obj_name, [obj_name])
+            metadata = _OBJECT_METADATA.get(obj_name, {})
+            aliases = metadata.get("aliases", [obj_name])
             matched = any(alias in query_lower for alias in aliases)
 
             # Also match if query is generic ("all", "objects", "所有", "物体")
@@ -104,7 +123,16 @@ class MuJoCoPerception:
 
                 # Use a human-readable label
                 label = obj_name.replace("_", " ")
-                det = Detection(label=label, bbox=bbox, confidence=1.0)
+                det = Detection(
+                    label=label,
+                    bbox=bbox,
+                    confidence=1.0,
+                    properties={
+                        "canonical_name": obj_name,
+                        "color": metadata.get("color"),
+                        "sim_source": "mujoco_ground_truth",
+                    },
+                )
                 results.append(det)
                 logger.info("[SIM DETECT] Matched '%s' → %s at (%.3f, %.3f, %.3f)",
                             query, obj_name, pos[0], pos[1], pos[2])
