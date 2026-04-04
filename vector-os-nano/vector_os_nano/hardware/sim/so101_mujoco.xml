@@ -123,18 +123,9 @@
                         mesh="moving_jaw_so101_v1" contype="0" conaffinity="0"/>
                 </body>
 
-                <!-- Gripper geoms (visual reference only, no physics grasping).
-                     Actual grasping uses weld constraints (see <equality>). -->
-                <geom name="fixed_jaw" type="box" size="0.003 0.012 0.015"
-                      pos="-0.012 0 -0.090" rgba="0.75 0.75 0.75 1"
-                      contype="0" conaffinity="0" mass="0.003"/>
-                <geom name="moving_jaw" type="box" size="0.003 0.012 0.015"
-                      pos="0.012 0 -0.090" rgba="0.75 0.75 0.75 1"
-                      contype="0" conaffinity="0" mass="0.003"/>
-
                 <!-- End-effector site (finger tip, between the grasp fingers) -->
                 <site name="ee_site" pos="0 0 -0.098"
-                      size="0.005" rgba="1 0 0 0.5"/>
+                      size="0.005" rgba="1 0 0 0"/>
 
               </body>
             </body>
