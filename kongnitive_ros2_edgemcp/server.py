@@ -591,6 +591,31 @@ async def ros_restart_node(node_name: str) -> dict:
     return result
 
 
+@mcp.tool()
+async def ros_delete_node(node_name: str) -> dict:
+    """
+    Delete a node: stop it if running and remove its saved script file.
+
+    Use this to permanently remove a node that is no longer needed.
+
+    Args:
+        node_name: Node identifier
+
+    Returns:
+        Status dict
+    """
+    nm = get_node_manager()
+    result = await node_tools.ros_delete_node(nm, node_name)
+
+    log_buffer = system_tools.get_log_buffer()
+    if result["status"] == "success":
+        log_buffer.add("INFO", f"Node '{node_name}' deleted", "system")
+    else:
+        log_buffer.add("ERROR", f"Failed to delete node '{node_name}': {result.get('message')}", "system")
+
+    return result
+
+
 # ============================================================================
 # Episode / AI Iteration Tools
 # ============================================================================

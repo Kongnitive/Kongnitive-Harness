@@ -24,9 +24,12 @@ from kongnitive_ros2_edgemcp.core.node_log import node_log
 
 
 class VectorSimDemoNode(Node):
-    """Picks the red lego, places it to the left, returns home. Repeats every 10s.
+    """Picks the red lego, places it to the left side, returns home. Repeats every 10s.
 
     Logs each skill result so the AI can observe success/failure and iterate.
+
+    IMPORTANT: Always use mode='hold' when pick is followed by place.
+    The default mode='drop' rotates 90° and discards the object.
     """
 
     def __init__(self):
@@ -48,12 +51,12 @@ class VectorSimDemoNode(Node):
         if not self._exec("detect", {"query": "red lego"}):
             return
 
-        # Step 3: Pick it up
-        if not self._exec("pick", {"object_label": "red lego"}):
+        # Step 3: Pick it up (mode='hold' keeps it in gripper for place)
+        if not self._exec("pick", {"object_label": "red lego", "mode": "hold"}):
             return
 
-        # Step 4: Place to the left (-x side)
-        self._exec("place", {"x": -0.25, "y": 0.0, "z": 0.05})
+        # Step 4: Place to the left (use IK-safe coordinates)
+        self._exec("place", {"x": 0.0, "y": 0.25, "z": 0.05})
 
     def _exec(self, skill: str, params: dict) -> bool:
         """Execute one skill, log the result, return success."""

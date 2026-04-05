@@ -862,7 +862,7 @@ class Agent:
         # - home itself
         skip_home = (
             (skill_name == "pick" and params.get("mode") == "hold")
-            or skill_name in ("gripper_close", "gripper_open", "home")
+            or skill_name in ("gripper_close", "gripper_open", "home", "place")
         )
         if not skip_home and (not steps or steps[-1].skill_name != "home"):
             steps.append(TaskStep(

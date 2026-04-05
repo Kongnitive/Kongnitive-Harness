@@ -89,7 +89,7 @@ class MyStrategyNode(Node):
 
     def run_task(self):
         # Implement your strategy here — this is what the AI iterates on
-        result = self.agent.execute_skill("pick", {"object_label": "red_cube"})
+        result = self.agent.execute_skill("pick", {"object_label": "red_cube", "mode": "hold"})
 
         # MUST report result — AI reads this via ros_get_node_log
         node_log(self.get_name(), {
@@ -109,7 +109,7 @@ def create_node():
 
 | Skill | Key Params | Description |
 |-------|-----------|-------------|
-| `pick` | `object_label: str` | Detect and grasp an object |
+| `pick` | `object_label: str, mode: str` | Detect and grasp an object. **mode='hold'** keeps it in gripper for subsequent place; **mode='drop'** (default) rotates 90° and discards. Always use `mode='hold'` when followed by `place`. |
 | `place` | `x, y, z: float` | Place at world coordinates |
 | `detect` | `query: str` | Detect objects matching query |
 | `scan` | — | Move arm to observation pose only; it does not itself perceive or classify objects |
@@ -141,6 +141,7 @@ Important:
 ### Iteration Heuristics
 
 - Start with the shortest possible closed loop: `home -> detect -> pick(mode='hold') -> place -> home`
+- **CRITICAL**: Always use `pick(mode='hold')` before `place`.
 - Always log a final `goal` entry with `success: true/false`
 - Before inventing a new strategy from scratch, call `ros_get_successful_node_examples(...)` and reuse a proven pattern when possible
 - After a task succeeds, call `ros_write_successful_node_examples(...)` so future sessions can reuse it
@@ -211,15 +212,15 @@ def run_task(self):
     if not det.success:
         return
 
-    # Step 3: pick
-    pick = self.agent.execute_skill("pick", {"object_label": "red cube"})
+    # Step 3: pick (mode='hold' keeps object in gripper for place)
+    pick = self.agent.execute_skill("pick", {"object_label": "red cube", "mode": "hold"})
     node_log(self.get_name(), {"skill": "pick", "success": pick.success,
                                 "failure_reason": pick.failure_reason})
     if not pick.success:
         return
 
-    # Step 4: place
-    place = self.agent.execute_skill("place", {"x": -0.2, "y": 0.0, "z": 0.05})
+    # Step 4: place (use IK-safe coordinates, avoid negative X)
+    place = self.agent.execute_skill("place", {"x": 0.0, "y": 0.25, "z": 0.05})
     node_log(self.get_name(), {"skill": "place", "success": place.success,
                                 "failure_reason": place.failure_reason})
 ```
