@@ -136,7 +136,8 @@ Important:
 - In the MuJoCo sim, `scan` is a motion primitive that prepares the robot pose for later perception
 - `detect` may come from simulator ground truth / alias matching, not a free-form VLM caption
 - If object appearance and object label disagree, check the sim scene definition and detection metadata
-- Prefer short, concrete English queries like `blue bottle`, `red mug`, `all objects`
+- **For pick/detect, always use the canonical object name** (e.g. `lego`, `mug`, `bottle`) — NOT color+name combos like `red lego`. The alias matcher does substring matching, so `"red lego"` also matches any object with `"red"` in its aliases (e.g. a red mug). Run `detect("all objects")` first to discover canonical names.
+- Use `"all objects"` or `"所有"` to list everything in the scene
 
 ### Iteration Heuristics
 
@@ -174,9 +175,9 @@ Every node MUST use verbose logging to make iteration effective. Key rules:
    # proceed directly to pick loop
    ```
 
-4. **Try multiple PICK_LABELS** — object labels vary; always use a fallback list:
+4. **Try multiple PICK_LABELS** — use canonical names first, then fallbacks:
    ```python
-   PICK_LABELS = ["green object", "green cube", "cube", "green brick", "object"]
+   PICK_LABELS = ["lego", "brick", "block", "cube", "object"]
    for label in self.PICK_LABELS:
        if self._exec("pick", {"object_label": label}):
            break
