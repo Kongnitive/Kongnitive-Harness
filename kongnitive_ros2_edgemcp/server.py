@@ -7,12 +7,21 @@ FastMCP server that enables AI-driven hot-swapping of ROS2 nodes.
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastmcp import FastMCP
 
 from kongnitive_ros2_edgemcp.core.episode_manager import EpisodeManager
 from kongnitive_ros2_edgemcp.core.node_manager import NodeManager
+from kongnitive_ros2_edgemcp.core.success_examples import (
+    build_example,
+    filter_examples,
+    find_success_entries,
+    get_store_path,
+    load_examples,
+    merge_examples,
+    upsert_example,
+)
 from kongnitive_ros2_edgemcp.tools import system_tools, node_tools, episode_tools
 from kongnitive_ros2_edgemcp.utils.config_loader import (
     get_config_dir,
@@ -63,6 +72,68 @@ def get_episode_manager() -> EpisodeManager:
     if episode_manager is None:
         episode_manager = EpisodeManager()
     return episode_manager
+
+
+def _get_builtin_example_paths() -> list[Path]:
+    """Return packaged example node scripts that can seed template reuse."""
+    repo_examples_dir = Path(__file__).resolve().parent.parent / "examples"
+    if not repo_examples_dir.exists():
+        return []
+    return sorted(
+        path for path in repo_examples_dir.glob("*.py")
+        if "create_node()" in path.read_text(encoding="utf-8")
+    )
+
+
+def _collect_session_examples(
+    script_dir: Path,
+    goal_filter: str = "",
+) -> list[dict[str, Any]]:
+    """Collect successful examples from saved scripts plus current node logs."""
+    from kongnitive_ros2_edgemcp.core.node_log import get_logs  # noqa: PLC0415
+
+    filt = (goal_filter or "").strip().lower()
+    examples: list[dict[str, Any]] = []
+    for script_path in sorted(script_dir.glob("*.py")):
+        node_name = script_path.stem
+        logs = get_logs(node_name, limit=200)
+        success_entries = find_success_entries(logs)
+        if not success_entries:
+            continue
+
+        script = script_path.read_text(encoding="utf-8")
+        example = build_example(
+            node_name=node_name,
+            script=script,
+            script_path=str(script_path),
+            recent_logs=logs,
+            source="session",
+        )
+        if filt:
+            filtered = filter_examples([example], goal_filter=filt, limit=1)
+            if not filtered:
+                continue
+        examples.append(example)
+    return examples
+
+
+def _collect_builtin_examples(goal_filter: str = "") -> list[dict[str, Any]]:
+    """Collect built-in example node scripts as a last-resort template source."""
+    examples: list[dict[str, Any]] = []
+    for script_path in _get_builtin_example_paths():
+        script = script_path.read_text(encoding="utf-8")
+        example = build_example(
+            node_name=script_path.stem,
+            script=script,
+            script_path=str(script_path),
+            recent_logs=[],
+            source="builtin",
+            summary="Packaged example node shipped with Kongnitive ROS2 EdgeMCP.",
+        )
+        example["has_goal_success"] = False
+        if filter_examples([example], goal_filter=goal_filter, limit=1):
+            examples.append(example)
+    return examples
 
 
 # ============================================================================
@@ -294,68 +365,116 @@ async def ros_get_node(node_name: str) -> dict:
 @mcp.tool()
 async def ros_get_successful_node_examples(goal_filter: str = "", limit: int = 5) -> dict:
     """
-    Get successful ROS2 node examples from the current Kongnitive session.
+    Get successful ROS2 node examples from persistent storage, current session,
+    and packaged fallback templates.
 
-    A node counts as successful when its node_log contains an entry with:
-    - skill == "goal"
-    - success == True
+    Success is recognized when a node has at least one `success == True` log entry.
+    Examples with a final `skill == "goal"` success are ranked higher.
 
     Args:
         goal_filter: Optional case-insensitive substring filter applied to node
-            name, script, and successful goal log entries
+            name, script, goal/summary fields, and recent logs
         limit: Maximum number of examples to return
 
     Returns:
-        Dict with matched example nodes including script, path, and success logs
+        Dict with matched example nodes including script, path, logs, and source
     """
-    from kongnitive_ros2_edgemcp.core.node_log import get_logs  # noqa: PLC0415
-
     nm = get_node_manager()
     script_dir = Path(nm.script_dir)
-    filt = (goal_filter or "").strip().lower()
-    examples: list[dict] = []
-
-    for script_path in sorted(script_dir.glob("*.py")):
-        node_name = script_path.stem
-        logs = get_logs(node_name, limit=200)
-        success_entries = [
-            entry for entry in logs
-            if entry.get("skill") == "goal" and entry.get("success") is True
-        ]
-        if not success_entries:
-            continue
-
-        script = script_path.read_text(encoding="utf-8")
-        haystacks = [node_name.lower(), script.lower()]
-        haystacks.extend(str(entry).lower() for entry in success_entries)
-        if filt and not any(filt in hay for hay in haystacks):
-            continue
-
-        last_success = success_entries[-1]
-        examples.append({
-            "node_name": node_name,
-            "script_path": str(script_path),
-            "script": script,
-            "success_count": len(success_entries),
-            "last_success": last_success,
-            "recent_logs": logs[-20:],
-        })
-
-    examples.sort(
-        key=lambda item: (
-            str(item["last_success"].get("t", "")),
-            item["success_count"],
-            item["node_name"],
-        ),
-        reverse=True,
+    store_path = get_store_path(script_dir)
+    persisted = load_examples(store_path)
+    session_examples = _collect_session_examples(script_dir, goal_filter=goal_filter)
+    for item in session_examples:
+        upsert_example(store_path, item)
+    merged = merge_examples(
+        filter_examples(session_examples, goal_filter=goal_filter, limit=max(20, limit * 4)),
+        filter_examples(persisted, goal_filter=goal_filter, limit=max(20, limit * 4)),
+        filter_examples(_collect_builtin_examples(goal_filter), goal_filter=goal_filter, limit=max(20, limit * 4)),
     )
-    examples = examples[: max(1, int(limit))]
+    examples = filter_examples(merged, goal_filter=goal_filter, limit=limit)
 
     return {
         "status": "success",
         "goal_filter": goal_filter,
+        "store_path": str(store_path),
         "count": len(examples),
         "examples": examples,
+    }
+
+
+@mcp.tool()
+async def ros_write_successful_node_examples(
+    node_name: str,
+    goal: str = "",
+    summary: str = "",
+    tags: Optional[list[str]] = None,
+    script: Optional[str] = None,
+    logs_limit: int = 200,
+) -> dict:
+    """
+    Persist a successful node example so future sessions can reuse it.
+
+    Args:
+        node_name: Node identifier to persist
+        goal: Optional user-level goal description for retrieval
+        summary: Optional short summary of why this example is useful
+        tags: Optional retrieval tags
+        script: Optional script override; otherwise read from running/saved node
+        logs_limit: Number of recent logs to capture alongside the example
+
+    Returns:
+        Dict with the persisted example metadata
+    """
+    from kongnitive_ros2_edgemcp.core.node_log import get_logs  # noqa: PLC0415
+
+    nm = get_node_manager()
+    result = await node_tools.ros_get_node(nm, node_name)
+    if result.get("status") != "success":
+        script_path = Path(nm.script_dir) / f"{node_name}.py"
+        if not script_path.exists() and not script:
+            return {
+                "status": "error",
+                "message": f"Node '{node_name}' not found and no script override provided",
+            }
+        script_text = script if script is not None else script_path.read_text(encoding="utf-8")
+        script_location = str(script_path)
+    else:
+        script_text = script if script is not None else result["script"]
+        script_location = result["script_path"]
+
+    logs = get_logs(node_name, limit=max(1, int(logs_limit)))
+    if not find_success_entries(logs):
+        return {
+            "status": "error",
+            "message": (
+                f"Node '{node_name}' has no successful log entries. "
+                "Only successful nodes can be persisted."
+            ),
+        }
+
+    example = build_example(
+        node_name=node_name,
+        script=script_text,
+        script_path=script_location,
+        recent_logs=logs,
+        source="manual",
+        goal=goal,
+        summary=summary,
+        tags=tags,
+    )
+    store_path = get_store_path(nm.script_dir)
+    upsert_example(store_path, example)
+
+    log_buffer = system_tools.get_log_buffer()
+    log_buffer.add(
+        "INFO",
+        f"Persisted successful node example '{node_name}'",
+        "system",
+    )
+    return {
+        "status": "success",
+        "store_path": str(store_path),
+        "example": example,
     }
 
 

@@ -232,6 +232,8 @@ ros_get_node_log("pick_strategy")
   → 分析失败原因
 patch_and_restart("pick_strategy", <改进的脚本>)
   → 重复直到 success: true
+ros_write_successful_node_examples("pick_strategy", goal="pick place red lego left table")
+  → 持久化当前成功模板，供后续 session 复用
 ```
 
 ## 5) 手动测试热推
@@ -286,6 +288,7 @@ def create_node():
 - 节点脚本**必须**调用 `node_log()` 上报结果，否则 `ros_get_node_log` 返回空
 - `get_agent()` 返回进程级单例，所有节点共享同一个 MuJoCo 仿真实例
 - 热推新版本时，旧节点日志自动清空
+- `ros_get_successful_node_examples()` 会先查持久化成功模板，再查当前 session 成功节点，最后回退到内置 examples
 
 ## 可用技能
 

@@ -181,6 +181,8 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 |------|------|
 | `ros_push_node(node_name, script)` | **热推 ROS2 节点（核心工具）** |
 | `ros_get_node_log(node_name, limit)` | **读取节点实时执行日志** |
+| `ros_get_successful_node_examples(goal_filter, limit)` | 检索成功模板，优先持久化样本，再看当前 session，最后回退到内置 examples |
+| `ros_write_successful_node_examples(node_name, goal, summary, tags, ...)` | 将当前成功节点显式持久化为可复用模板 |
 | `ros_list_nodes()` | 列出运行中的节点 |
 | `ros_get_node(node_name)` | 获取节点当前源码 |
 | `ros_start_node(node_name)` | 启动已保存的节点 |
@@ -289,6 +291,12 @@ kongnitive-ros2-edgemcp/
 **ros_get_node_log 返回空**
 - 节点脚本中必须调用 `node_log()` 上报结果
 - 等待至少一个 timer 周期（默认 3s）后再读取
+
+**ros_get_successful_node_examples 返回空或不稳定**
+- 当前版本会优先读取持久化成功样本
+- 若当前 session 有任意 `success: true` 日志，也会自动纳入候选，`skill == "goal"` 的样本仅排序更高
+- 若前两者都没有，会回退到 `examples/` 下的内置模板
+- 任务跑通后可调用 `ros_write_successful_node_examples(...)` 显式持久化
 
 ## License
 

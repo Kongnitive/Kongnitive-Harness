@@ -209,6 +209,126 @@ logging:
     assert config["logging"]["default_limit"] == 7
 
 
+def test_success_example_store_roundtrip(tmp_path):
+    """Test successful example persistence helpers."""
+    from kongnitive_ros2_edgemcp.core.success_examples import (
+        build_example,
+        filter_examples,
+        get_store_path,
+        load_examples,
+        upsert_example,
+    )
+
+    store_path = get_store_path(tmp_path / "nodes")
+    example = build_example(
+        node_name="demo",
+        script="def create_node():\n    pass\n",
+        script_path=str(tmp_path / "nodes" / "demo.py"),
+        recent_logs=[{"skill": "pick", "success": True}],
+        source="manual",
+        goal="pick place red lego",
+        summary="demo summary",
+        tags=["lego"],
+    )
+    upsert_example(store_path, example)
+
+    persisted = load_examples(store_path)
+    assert len(persisted) == 1
+    assert persisted[0]["node_name"] == "demo"
+    assert persisted[0]["has_goal_success"] is False
+
+    filtered = filter_examples(persisted, goal_filter="lego", limit=3)
+    assert len(filtered) == 1
+    assert filtered[0]["goal"] == "pick place red lego"
+
+
+@pytest.mark.asyncio
+async def test_ros_get_successful_node_examples_accepts_non_goal_success(tmp_path, monkeypatch):
+    """Test retrieval works for success logs even without a goal entry."""
+    from kongnitive_ros2_edgemcp import server
+    from kongnitive_ros2_edgemcp.core.node_log import clear_logs, node_log
+
+    script_dir = tmp_path / "nodes"
+    script_dir.mkdir()
+    (script_dir / "demo.py").write_text(
+        "import rclpy\n"
+        "from rclpy.node import Node\n\n"
+        "class Demo(Node):\n"
+        "    def __init__(self):\n"
+        "        super().__init__('demo')\n\n"
+        "def create_node():\n"
+        "    return Demo()\n",
+        encoding="utf-8",
+    )
+    node_log("demo", {"skill": "pick", "success": True, "failure_reason": None})
+
+    class FakeNodeManager:
+        def __init__(self, script_dir):
+            self.script_dir = script_dir
+
+    monkeypatch.setattr(server, "get_node_manager", lambda: FakeNodeManager(script_dir))
+    result = await server.ros_get_successful_node_examples(goal_filter="pick", limit=5)
+
+    assert result["status"] == "success"
+    assert result["count"] >= 1
+    assert any(item["node_name"] == "demo" for item in result["examples"])
+    assert any(item["source"] == "session" for item in result["examples"])
+    clear_logs("demo")
+
+
+@pytest.mark.asyncio
+async def test_ros_write_successful_node_examples_persists_current_node(tmp_path, monkeypatch):
+    """Test explicit persistence tool writes the current successful node example."""
+    from kongnitive_ros2_edgemcp import server
+    from kongnitive_ros2_edgemcp.core.node_log import clear_logs, node_log
+    from kongnitive_ros2_edgemcp.core.success_examples import get_store_path, load_examples
+
+    script_dir = tmp_path / "nodes"
+    script_dir.mkdir()
+    script_path = script_dir / "demo.py"
+    script_path.write_text(
+        "import rclpy\n"
+        "from rclpy.node import Node\n\n"
+        "class Demo(Node):\n"
+        "    def __init__(self):\n"
+        "        super().__init__('demo')\n\n"
+        "def create_node():\n"
+        "    return Demo()\n",
+        encoding="utf-8",
+    )
+    node_log("demo", {"skill": "goal", "success": True})
+
+    class FakeNodeManager:
+        def __init__(self, script_dir):
+            self.script_dir = script_dir
+
+    async def fake_ros_get_node(_nm, node_name):
+        return {
+            "status": "success",
+            "node_name": node_name,
+            "script": script_path.read_text(encoding="utf-8"),
+            "script_path": str(script_path),
+        }
+
+    monkeypatch.setattr(server, "get_node_manager", lambda: FakeNodeManager(script_dir))
+    monkeypatch.setattr(server.node_tools, "ros_get_node", fake_ros_get_node)
+
+    result = await server.ros_write_successful_node_examples(
+        node_name="demo",
+        goal="pick place red lego left table",
+        summary="stable success",
+        tags=["lego", "left"],
+    )
+
+    assert result["status"] == "success"
+    store_path = get_store_path(script_dir)
+    persisted = load_examples(store_path)
+    assert len(persisted) == 1
+    assert persisted[0]["goal"] == "pick place red lego left table"
+    assert persisted[0]["has_goal_success"] is True
+    clear_logs("demo")
+
+
 @pytest.mark.asyncio
 async def test_node_manager_initialization(mock_rclpy, tmp_path):
     """Test NodeManager initializes correctly."""

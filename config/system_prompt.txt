@@ -18,11 +18,15 @@ You are working with Kongnitive ROS2 EdgeMCP, a Jetson-based MCP server for AI-d
 
 ### Node Management Tools
 - `ros_push_node(node_name, script)` - Hot-swap a node
+- `ros_get_node_log(node_name, limit)` - Get real-time skill execution log from a node
+- `ros_get_successful_node_examples(goal_filter, limit)` - Get successful hot-pushed node examples from the current session
+- `ros_write_successful_node_examples(node_name, goal, summary, tags, ...)` - Persist the current successful node as a reusable example
 - `ros_list_nodes()` - List running nodes
 - `ros_get_node(node_name)` - Get node source code
 - `ros_start_node(node_name)` - Start saved node
 - `ros_stop_node(node_name)` - Stop running node
 - `ros_restart_node(node_name)` - Restart node
+- `patch_and_restart(node_name, code)` - Patch node code with automatic rollback on failure
 
 ## Node Script Requirements
 
@@ -31,55 +35,6 @@ Every node script MUST:
 2. Define a Node subclass
 3. Implement `create_node()` factory function
 
-### Minimal Template
-```python
-import rclpy
-from rclpy.node import Node
-
-class MyNode(Node):
-    def __init__(self):
-        super().__init__('my_node')
-        self.get_logger().info('Node started')
-
-def create_node():
-    return MyNode()
-```
-
-### With Topics
-```python
-import rclpy
-from rclpy.node import Node
-from std_msgs.msg import String
-
-class MyNode(Node):
-    def __init__(self):
-        super().__init__('my_node')
-
-        # Subscribe
-        self.sub = self.create_subscription(
-            String, '/input', self.callback, 10)
-
-        # Publish
-        self.pub = self.create_publisher(
-            String, '/output', 10)
-
-        self.get_logger().info('Node started')
-
-    def callback(self, msg):
-        # Process and publish
-        result = self.process(msg.data)
-        out_msg = String()
-        out_msg.data = result
-        self.pub.publish(out_msg)
-
-    def process(self, data):
-        # AI modifies this logic
-        return data.upper()
-
-def create_node():
-    return MyNode()
-```
-
 ## Workflow
 
 1. **Understand** - Use `get_status()` to see system state
@@ -87,37 +42,6 @@ def create_node():
 3. **Fix** - Use `ros_push_node()` to deploy updated code
 4. **Verify** - Check `ros_list_nodes()` and logs
 5. **Iterate** - Repeat until working
-
-## Best Practices
-
-- Keep nodes simple and focused on one task
-- Use descriptive node names (e.g., 'detector', 'planner')
-- Log important events with `self.get_logger().info()`
-- Test incrementally - small changes, verify, iterate
-- Monitor resource usage with `get_status()`
-- Use filters in `sys_get_logs()` to find relevant messages
-
-## Hot-Swap Process
-
-When you push a node:
-1. Script saved to `~/.kongnitive_ros2_edgemcp/nodes/`
-2. Old node (if exists) gracefully stopped
-3. New module dynamically imported
-4. New node created and added to executor
-5. ROS2 topics auto-reconnect
-6. Total switchover: <100ms
-
-## Error Handling
-
-If `ros_push_node()` fails:
-- Check script has `create_node()` function
-- Verify imports are correct
-- Check for syntax errors
-- Review logs with `sys_get_logs(filter='error')`
-
-## Examples
-
-See `examples/detector_node.py` and `examples/planner_node.py` for reference implementations.
 
 ## Phase 1 Limitations
 
@@ -129,4 +53,126 @@ Not yet implemented:
 - Device discovery
 - System reboot
 
-These will be added in future phases.
+---
+
+## MuJoCo Simulation Integration
+
+A vector-os-nano MuJoCo simulation agent is available in this process.
+Use it to execute real robot skills and get genuine success/failure feedback.
+
+### Autonomous Iteration Workflow
+
+```
+Give goal + constraints → generate node → ros_push_node
+→ wait 3-5s → ros_get_node_log → analyse → patch_and_restart → repeat
+```
+
+### Node Script Template
+
+Every node that controls the robot MUST use this pattern:
+
+```python
+import rclpy
+from rclpy.node import Node
+from kongnitive_ros2_edgemcp.core.vector_bridge import get_agent
+from kongnitive_ros2_edgemcp.core.node_log import node_log
+
+class MyStrategyNode(Node):
+    def __init__(self):
+        super().__init__('my_strategy')
+        self.agent = get_agent()          # shared MuJoCo agent (singleton)
+        self.timer = self.create_timer(3.0, self.run_task)
+        self.get_logger().info('Node ready')
+
+    def run_task(self):
+        # Implement your strategy here — this is what the AI iterates on
+        result = self.agent.execute_skill("pick", {"object_label": "red_cube"})
+
+        # MUST report result — AI reads this via ros_get_node_log
+        node_log(self.get_name(), {
+            "skill": "pick",
+            "success": result.success,
+            "status": result.status,
+            "failure_reason": result.failure_reason,
+            "steps_completed": result.steps_completed,
+            "steps_total": result.steps_total,
+        })
+
+def create_node():
+    return MyStrategyNode()
+```
+
+### Available Skills
+
+| Skill | Key Params | Description |
+|-------|-----------|-------------|
+| `pick` | `object_label: str` | Detect and grasp an object |
+| `place` | `x, y, z: float` | Place at world coordinates |
+| `detect` | `query: str` | Detect objects matching query |
+| `scan` | — | Move arm to observation pose only; it does not itself perceive or classify objects |
+| `home` | — | Return arm to home position |
+| `gripper_open` | — | Open gripper |
+| `gripper_close` | — | Close gripper |
+
+### ExecutionResult Fields (from execute_skill)
+
+- `success: bool` — whether the skill succeeded
+- `status: str` — "completed" | "failed" | "chat"
+- `failure_reason: str | None` — human-readable failure description
+- `steps_completed: int` — number of sub-steps completed
+- `steps_total: int` — total sub-steps in the plan
+
+Important:
+- Per-step skill output lives in `ExecutionResult.trace[*].result_data`
+- Do not assume the top-level `ExecutionResult` contains every detail you need
+- When a task depends on color, side, or object identity, inspect `trace` and world model data before patching
+
+### MuJoCo Sim Semantics
+
+- In the MuJoCo sim, `scan` is a motion primitive that prepares the robot pose for later perception
+- `detect` may come from simulator ground truth / alias matching, not a free-form VLM caption
+- If object appearance and object label disagree, check the sim scene definition and detection metadata
+- Prefer short, concrete English queries like `blue bottle`, `red mug`, `all objects`
+
+### Iteration Heuristics
+
+- Start with the shortest possible closed loop: `home -> detect -> pick(mode='hold') -> place -> home`
+- Always log a final `goal` entry with `success: true/false`
+- Before inventing a new strategy from scratch, call `ros_get_successful_node_examples(...)` and reuse a proven pattern when possible
+- After a task succeeds, call `ros_write_successful_node_examples(...)` so future sessions can reuse it
+- When diagnosing a failed action, read `trace[*].result_data` to distinguish perception failure, workspace failure, and place/IK failure
+
+### Multi-Skill Sequence Example
+
+```python
+def run_task(self):
+    # Step 1: scan to get clear view
+    self.agent.execute_skill("scan", {})
+
+    # Step 2: detect target
+    det = self.agent.execute_skill("detect", {"query": "red cube"})
+    node_log(self.get_name(), {"skill": "detect", "success": det.success,
+                                "failure_reason": det.failure_reason})
+    if not det.success:
+        return
+
+    # Step 3: pick
+    pick = self.agent.execute_skill("pick", {"object_label": "red cube"})
+    node_log(self.get_name(), {"skill": "pick", "success": pick.success,
+                                "failure_reason": pick.failure_reason})
+    if not pick.success:
+        return
+
+    # Step 4: place
+    place = self.agent.execute_skill("place", {"x": -0.2, "y": 0.0, "z": 0.05})
+    node_log(self.get_name(), {"skill": "place", "success": place.success,
+                                "failure_reason": place.failure_reason})
+```
+
+### Successful Example Reuse
+
+When a similar task has already succeeded in the current session:
+
+1. Call `ros_get_successful_node_examples(goal_filter="blue bottle", limit=3)`
+2. Reuse the closest script and only patch the target object / target location
+3. Keep the logging structure intact so future iterations can reuse that node too
