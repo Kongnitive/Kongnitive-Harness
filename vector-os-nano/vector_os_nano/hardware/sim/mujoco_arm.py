@@ -247,12 +247,13 @@ class MuJoCoArm:
             for i in range(steps):
                 # Linear interpolation of actuator targets
                 t = (i + 1) / steps
-                for j, (act_id, s, g) in enumerate(
-                    zip(self._arm_actuator_ids, start, positions)
-                ):
-                    self._data.ctrl[act_id] = s + t * (g - s)
+                with self._viewer.lock():
+                    for j, (act_id, s, g) in enumerate(
+                        zip(self._arm_actuator_ids, start, positions)
+                    ):
+                        self._data.ctrl[act_id] = s + t * (g - s)
 
-                mj.mj_step(self._model, self._data)
+                    mj.mj_step(self._model, self._data)
 
                 if i % sync_interval == 0:
                     self._viewer.sync()
@@ -293,30 +294,36 @@ class MuJoCoArm:
         self._require_connection()
         mj = _get_mujoco()
 
-        # Save full state
-        old_qpos = self._data.qpos.copy()
-        old_qvel = self._data.qvel.copy()
+        def _compute():
+            # Save full state
+            old_qpos = self._data.qpos.copy()
+            old_qvel = self._data.qvel.copy()
 
-        # Set requested joints
-        for i, pos in enumerate(joint_positions):
-            self._data.joint(_ARM_JOINT_NAMES[i]).qpos[0] = pos
+            # Set requested joints
+            for i, pos in enumerate(joint_positions):
+                self._data.joint(_ARM_JOINT_NAMES[i]).qpos[0] = pos
 
-        mj.mj_forward(self._model, self._data)
+            mj.mj_forward(self._model, self._data)
 
-        # Read EE site
-        ee_pos = list(self._data.site_xpos[self._ee_site_id].copy())
-        ee_rot = (
-            self._data.site_xmat[self._ee_site_id]
-            .reshape(3, 3)
-            .tolist()
-        )
+            # Read EE site
+            ee_pos = list(self._data.site_xpos[self._ee_site_id].copy())
+            ee_rot = (
+                self._data.site_xmat[self._ee_site_id]
+                .reshape(3, 3)
+                .tolist()
+            )
 
-        # Restore
-        self._data.qpos[:] = old_qpos
-        self._data.qvel[:] = old_qvel
-        mj.mj_forward(self._model, self._data)
+            # Restore
+            self._data.qpos[:] = old_qpos
+            self._data.qvel[:] = old_qvel
+            mj.mj_forward(self._model, self._data)
 
-        return ee_pos, ee_rot
+            return ee_pos, ee_rot
+
+        if self._viewer is not None:
+            with self._viewer.lock():
+                return _compute()
+        return _compute()
 
     def ik(
         self,
@@ -336,68 +343,74 @@ class MuJoCoArm:
 
         target = np.array(target_xyz, dtype=np.float64)
 
-        # Save state
-        old_qpos = self._data.qpos.copy()
-        old_qvel = self._data.qvel.copy()
+        def _solve():
+            # Save state
+            old_qpos = self._data.qpos.copy()
+            old_qvel = self._data.qvel.copy()
 
-        # Seed from current or provided joints
-        seed = current_joints if current_joints is not None else self.get_joint_positions()
-        for i, pos in enumerate(seed):
-            self._data.joint(_ARM_JOINT_NAMES[i]).qpos[0] = pos
+            # Seed from current or provided joints
+            seed = current_joints if current_joints is not None else self.get_joint_positions()
+            for i, pos in enumerate(seed):
+                self._data.joint(_ARM_JOINT_NAMES[i]).qpos[0] = pos
 
-        # Map arm joint qpos indices (for indexing into full Jacobian)
-        arm_qpos_adrs = [
-            self._model.jnt_qposadr[jid] for jid in self._arm_joint_ids
-        ]
-        arm_dof_adrs = [
-            self._model.jnt_dofadr[jid] for jid in self._arm_joint_ids
-        ]
+            # Map arm joint qpos indices (for indexing into full Jacobian)
+            arm_qpos_adrs = [
+                self._model.jnt_qposadr[jid] for jid in self._arm_joint_ids
+            ]
+            arm_dof_adrs = [
+                self._model.jnt_dofadr[jid] for jid in self._arm_joint_ids
+            ]
 
-        success = False
-        for _ in range(_IK_MAX_ITER):
+            success = False
+            for _ in range(_IK_MAX_ITER):
+                mj.mj_forward(self._model, self._data)
+
+                # Current EE position
+                ee_pos = self._data.site_xpos[self._ee_site_id].copy()
+                err = target - ee_pos
+                if np.linalg.norm(err) < _IK_TOL:
+                    success = True
+                    break
+
+                # Compute site Jacobian (3 x nv for position)
+                jacp = np.zeros((3, self._model.nv), dtype=np.float64)
+                mj.mj_jacSite(self._model, self._data, jacp, None, self._ee_site_id)
+
+                # Extract columns for arm DOFs only
+                J = jacp[:, arm_dof_adrs]
+
+                # Damped least-squares: dq = J^T (J J^T + lambda I)^{-1} err
+                JJt = J @ J.T + _IK_DAMPING * np.eye(3)
+                dq = J.T @ np.linalg.solve(JJt, err)
+
+                # Apply
+                for i, adr in enumerate(arm_qpos_adrs):
+                    self._data.qpos[adr] += _IK_STEP_SIZE * dq[i]
+                    # Clamp to joint limits
+                    lo = self._model.jnt_range[self._arm_joint_ids[i], 0]
+                    hi = self._model.jnt_range[self._arm_joint_ids[i], 1]
+                    self._data.qpos[adr] = float(
+                        np.clip(self._data.qpos[adr], lo, hi)
+                    )
+
+            if success:
+                result = [
+                    float(self._data.qpos[adr]) for adr in arm_qpos_adrs
+                ]
+            else:
+                result = None
+
+            # Restore
+            self._data.qpos[:] = old_qpos
+            self._data.qvel[:] = old_qvel
             mj.mj_forward(self._model, self._data)
 
-            # Current EE position
-            ee_pos = self._data.site_xpos[self._ee_site_id].copy()
-            err = target - ee_pos
-            if np.linalg.norm(err) < _IK_TOL:
-                success = True
-                break
+            return result
 
-            # Compute site Jacobian (3 x nv for position)
-            jacp = np.zeros((3, self._model.nv), dtype=np.float64)
-            mj.mj_jacSite(self._model, self._data, jacp, None, self._ee_site_id)
-
-            # Extract columns for arm DOFs only
-            J = jacp[:, arm_dof_adrs]
-
-            # Damped least-squares: dq = J^T (J J^T + lambda I)^{-1} err
-            JJt = J @ J.T + _IK_DAMPING * np.eye(3)
-            dq = J.T @ np.linalg.solve(JJt, err)
-
-            # Apply
-            for i, adr in enumerate(arm_qpos_adrs):
-                self._data.qpos[adr] += _IK_STEP_SIZE * dq[i]
-                # Clamp to joint limits
-                lo = self._model.jnt_range[self._arm_joint_ids[i], 0]
-                hi = self._model.jnt_range[self._arm_joint_ids[i], 1]
-                self._data.qpos[adr] = float(
-                    np.clip(self._data.qpos[adr], lo, hi)
-                )
-
-        if success:
-            result = [
-                float(self._data.qpos[adr]) for adr in arm_qpos_adrs
-            ]
-        else:
-            result = None
-
-        # Restore
-        self._data.qpos[:] = old_qpos
-        self._data.qvel[:] = old_qvel
-        mj.mj_forward(self._model, self._data)
-
-        return result
+        if self._viewer is not None:
+            with self._viewer.lock():
+                return _solve()
+        return _solve()
 
     def stop(self) -> None:
         """Stop all motion by targeting current positions."""
@@ -437,29 +450,40 @@ class MuJoCoArm:
         """
         self._require_connection()
         mj = _get_mujoco()
-        result: dict[str, list[float]] = {}
-        for i in range(self._model.nbody):
-            body_name = mj.mj_id2name(self._model, mj.mjtObj.mjOBJ_BODY, i)
-            if body_name is None:
-                continue
-            # Free bodies have a freejoint — check via parent joint type
-            jnt_start = self._model.body_jntadr[i]
-            if jnt_start < 0:
-                continue
-            jnt_type = self._model.jnt_type[jnt_start]
-            if jnt_type == mj.mjtJoint.mjJNT_FREE:
-                pos = list(self._data.body(body_name).xpos)
-                result[body_name] = pos
-        return result
+
+        def _read():
+            result: dict[str, list[float]] = {}
+            for i in range(self._model.nbody):
+                body_name = mj.mj_id2name(self._model, mj.mjtObj.mjOBJ_BODY, i)
+                if body_name is None:
+                    continue
+                # Free bodies have a freejoint — check via parent joint type
+                jnt_start = self._model.body_jntadr[i]
+                if jnt_start < 0:
+                    continue
+                jnt_type = self._model.jnt_type[jnt_start]
+                if jnt_type == mj.mjtJoint.mjJNT_FREE:
+                    pos = list(self._data.body(body_name).xpos)
+                    result[body_name] = pos
+            return result
+
+        if self._viewer is not None:
+            with self._viewer.lock():
+                return _read()
+        return _read()
 
     def step(self, n: int = 1) -> None:
         """Advance simulation by n timesteps. Syncs viewer if active."""
         self._require_connection()
         mj = _get_mujoco()
-        for _ in range(n):
-            mj.mj_step(self._model, self._data)
         if self._viewer is not None:
+            with self._viewer.lock():
+                for _ in range(n):
+                    mj.mj_step(self._model, self._data)
             self._viewer.sync()
+        else:
+            for _ in range(n):
+                mj.mj_step(self._model, self._data)
 
     def render(
         self,
@@ -477,13 +501,17 @@ class MuJoCoArm:
         import numpy as np  # noqa: PLC0415
 
         try:
-            renderer = mj.Renderer(self._model, height=height, width=width)
-            renderer.update_scene(self._data, camera=camera_name)
-            rgb = renderer.render()
-            renderer.close()
-            # MuJoCo returns RGB; convert to BGR for OpenCV compatibility
-            bgr = np.ascontiguousarray(rgb[:, :, ::-1])
-            return bgr
+            def _do_render():
+                renderer = mj.Renderer(self._model, height=height, width=width)
+                renderer.update_scene(self._data, camera=camera_name)
+                rgb = renderer.render()
+                renderer.close()
+                return np.ascontiguousarray(rgb[:, :, ::-1])
+
+            if self._viewer is not None:
+                with self._viewer.lock():
+                    return _do_render()
+            return _do_render()
         except Exception as exc:
             logger.warning("MuJoCoArm.render failed: %s", exc)
             return None
