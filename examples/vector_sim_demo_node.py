@@ -24,7 +24,7 @@ from kongnitive_ros2_edgemcp.core.node_log import node_log
 
 
 class VectorSimDemoNode(Node):
-    """Picks the red cube, places it to the left, returns home. Repeats every 10s.
+    """Picks the red lego, places it to the left, returns home. Repeats every 10s.
 
     Logs each skill result so the AI can observe success/failure and iterate.
     """
@@ -45,11 +45,11 @@ class VectorSimDemoNode(Node):
         self._exec("scan", {})
 
         # Step 2: Detect the target object
-        if not self._exec("detect", {"query": "red cube"}):
+        if not self._exec("detect", {"query": "red lego"}):
             return
 
         # Step 3: Pick it up
-        if not self._exec("pick", {"object_label": "red cube"}):
+        if not self._exec("pick", {"object_label": "red lego"}):
             return
 
         # Step 4: Place to the left (-x side)
