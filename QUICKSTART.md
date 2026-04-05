@@ -3,6 +3,7 @@
 ## 目标
 
 给 AI 一个目标，AI 自主生成 ROS2 节点代码、热推执行、读取 MuJoCo 仿真反馈、迭代改进。
+ROS2 负责节点间通信，EdgeMCP 负责热推、生命周期与运行时能力视图。
 **无需 Gazebo，无需 build，无需重启。**
 
 ## 前置条件
@@ -252,6 +253,9 @@ ros_get_node_log("vector_demo")
 #  {"t": "...", "skill": "detect", "success": true,  "failure_reason": null},
 #  {"t": "...", "skill": "pick",   "success": false, "failure_reason": "Cannot locate red cube"}]
 
+# 查看当前 runtime 的节点、技能和核心 topics
+ros_list_capabilities()
+
 # 修改节点逻辑后热推新版本
 patch_and_restart("vector_demo", <new_script>)
 ```
@@ -287,6 +291,7 @@ def create_node():
 - 节点脚本**必须**定义 `create_node()` 并返回 `rclpy.node.Node` 实例
 - 节点脚本**必须**调用 `node_log()` 上报结果，否则 `ros_get_node_log` 返回空
 - `get_agent()` 返回进程级单例，所有节点共享同一个 MuJoCo 仿真实例
+- 节点间协作优先通过 ROS2 topic/service；当前核心 topic 包括 `/world_model/state` 和 `/zone_events`
 - 热推新版本时，旧节点日志自动清空
 - `ros_get_successful_node_examples()` 会先查持久化成功模板，再查当前 session 成功节点，最后回退到内置 examples
 
@@ -301,3 +306,103 @@ def create_node():
 | `home` | — | 返回原位 |
 | `gripper_open` | — | 张开夹爪 |
 | `gripper_close` | — | 闭合夹爪 |
+
+## 观察节点示例
+
+仓库内提供了 `examples/observer_node.py`：
+
+- 订阅 `/world_model/state`
+- 在对象跨越 left / center / right 区域时发布 `/zone_events`
+- 通过 `node_log()` 上报 `zone_change` 事件，供 `ros_get_node_log("observer")` 读取
+
+它用于演示“新增节点通过协议接入系统”，而不是把所有逻辑都塞进同一个控制节点。
+
+## 多节点协作 Demo
+
+这组步骤用于验证本轮新增的三项能力：
+
+- `WorldModel` 会主动发布到 `/world_model/state`
+- observer 节点可以在运行时热推加入系统
+- `ros_list_capabilities()` 能返回当前 runtime 的能力视图
+
+### 1) 启动服务
+
+先按上文方式启动 `kongnitive_ros2_edgemcp.server`。
+
+### 2) 观察 world state topic
+
+在 WSL2 新开一个终端：
+
+```bash
+source /opt/ros/humble/setup.bash
+ros2 topic echo /world_model/state
+```
+
+正常情况下，启动后就应能看到 world state JSON 快照，后续检测或机器人状态变化时会继续更新。
+
+### 3) 热推 observer 节点
+
+在 Claude Code、Codex 或任意 MCP 客户端中执行：
+
+```python
+ros_push_node("observer", open("examples/observer_node.py").read())
+```
+
+然后确认节点已加入当前 runtime：
+
+```python
+ros_list_capabilities()
+```
+
+预期返回中应至少包含：
+
+- `managed_nodes` 里有 `observer`
+- `topics` 里有 `/world_model/state`
+- `topics` 里有 `/zone_events`
+
+### 4) 观察 zone events
+
+再开一个 WSL2 终端：
+
+```bash
+source /opt/ros/humble/setup.bash
+ros2 topic echo /zone_events
+```
+
+此时 observer 已经在等待 world state 更新，并会在物体跨越 left / center / right 区域时发布事件。
+
+### 5) 触发一次对象移动
+
+可用任一现有控制节点让场景物体位置变化，例如：
+
+```python
+ros_push_node("vector_demo", open("examples/vector_sim_demo_node.py").read())
+```
+
+等待一个 timer 周期后，`vector_demo` 会执行 scan / detect / pick / place。  
+如果物体位置跨过 observer 的区域边界，`/zone_events` 会收到 `zone_change` 事件。
+
+### 6) 读取 observer 的结构化日志
+
+在 MCP 客户端中执行：
+
+```python
+ros_get_node_log("observer")
+```
+
+预期会看到 observer 写入的结构化事件，例如：
+
+- `event: "zone_change"`
+- `object_id`
+- `label`
+- `zone`
+- `position`
+- `timestamp`
+
+### 7) 验证这次改动的叙事
+
+如果上面三路都成立，就说明这次改动已经形成了完整演示链路：
+
+- 世界状态通过 ROS2 topic 对外广播，而不只靠 service query
+- observer 可以在不修改主控制节点的情况下被热推加入系统
+- EdgeMCP 提供的是控制面能力视图，而节点间协作本身走 ROS2 协议

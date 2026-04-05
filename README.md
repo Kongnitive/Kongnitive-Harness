@@ -12,6 +12,8 @@
 
 Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代（< 5 秒/轮）
 
+在当前实现里，ROS2 负责节点间通信骨干，EdgeMCP 负责热推、生命周期和运行时能力视图。
+
 ## 整体架构
 
 ```
@@ -30,6 +32,7 @@ Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代�
 │  │ ros_push_node ───┼──►│   热推/卸载 ROS2 节点         │   │
 │  │ ros_get_node_log─┼──►│   NodeLogStore (per-node log) │   │
 │  │ patch_and_restart│   └───────────┬───────────────────┘   │
+│  │ ros_list_capab. │               │ executor spin          │
 │  │ ros_list_nodes   │               │ executor spin          │
 │  │ get_status       │               ▼                        │
 │  └──────────────────┘      ┌────────────────────┐           │
@@ -38,6 +41,9 @@ Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代�
 │                             │  execute_skill(...) │           │
 │                             │  node_log(result)  │           │
 │                             └────────┬───────────┘           │
+│                                      │ ROS2 topics           │
+│                                      ▼                       │
+│                           /world_model/state, /zone_events   │
 └──────────────────────────────────────┼───────────────────────┘
                                        │ Python import (同进程)
                                        ▼
@@ -181,6 +187,7 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 |------|------|
 | `ros_push_node(node_name, script)` | **热推 ROS2 节点（核心工具）** |
 | `ros_get_node_log(node_name, limit)` | **读取节点实时执行日志** |
+| `ros_list_capabilities()` | 查看当前 runtime 可见的节点、技能与核心 topic |
 | `ros_get_successful_node_examples(goal_filter, limit)` | 检索成功模板，优先持久化样本，再看当前 session，最后回退到内置 examples |
 | `ros_write_successful_node_examples(node_name, goal, summary, tags, ...)` | 将当前成功节点显式持久化为可复用模板 |
 | `ros_list_nodes()` | 列出运行中的节点 |
@@ -230,7 +237,9 @@ def create_node():
 
 可用技能：`pick` / `place` / `detect` / `scan` / `home` / `gripper_open` / `gripper_close`
 
-完整示例见 `examples/vector_sim_demo_node.py`。
+组合式观察节点示例见 `examples/observer_node.py`，它通过订阅 `/world_model/state`、发布 `/zone_events` 来接入系统，无需修改主控制节点。
+
+完整执行技能示例见 `examples/vector_sim_demo_node.py`。
 
 ## 热推机制
 

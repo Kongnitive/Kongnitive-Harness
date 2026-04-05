@@ -6,6 +6,7 @@ Basic tests for NodeManager and MCP tools.
 
 import pytest
 import asyncio
+import sys
 from pathlib import Path
 
 
@@ -154,6 +155,21 @@ def test_example_planner_node():
     assert "def create_node()" in content
     assert "class PlannerNode" in content
     assert "import rclpy" in content
+
+
+def test_example_observer_node():
+    """Test observer example exposes the world-state subscription pattern."""
+    from pathlib import Path
+
+    observer_path = Path(__file__).parent.parent / "examples" / "observer_node.py"
+    assert observer_path.exists()
+
+    content = observer_path.read_text(encoding="utf-8")
+    assert "def create_node()" in content
+    assert "class ObserverNode" in content
+    assert '"/world_model/state"' in content
+    assert '"/zone_events"' in content
+    assert "node_log" in content
 
 
 def test_config_files_exist():
@@ -327,6 +343,60 @@ async def test_ros_write_successful_node_examples_persists_current_node(tmp_path
     assert persisted[0]["goal"] == "pick place red lego left table"
     assert persisted[0]["has_goal_success"] is True
     clear_logs("demo")
+
+
+@pytest.mark.asyncio
+async def test_ros_list_capabilities_returns_runtime_view(monkeypatch):
+    """Test runtime capability view combines managed nodes and local skills."""
+    from types import SimpleNamespace
+
+    class FakeFastMCP:
+        def __init__(self, _name):
+            pass
+
+        def tool(self):
+            def decorator(func):
+                return func
+            return decorator
+
+        def run(self, **_kwargs):
+            return None
+
+    monkeypatch.setitem(sys.modules, "fastmcp", SimpleNamespace(FastMCP=FakeFastMCP))
+    from kongnitive_ros2_edgemcp import server
+
+    class FakeNodeManager:
+        async def list_nodes(self):
+            return {
+                "status": "success",
+                "count": 1,
+                "nodes": [
+                    {
+                        "name": "observer",
+                        "ros_node_name": "observer",
+                        "namespace": "/",
+                        "script_path": "/tmp/observer.py",
+                    }
+                ],
+            }
+
+    class FakeAgent:
+        skills = ["detect", "pick", "place"]
+
+    monkeypatch.setattr(server, "get_node_manager", lambda: FakeNodeManager())
+    monkeypatch.setattr(
+        "kongnitive_ros2_edgemcp.core.vector_bridge.get_agent",
+        lambda: FakeAgent(),
+    )
+
+    result = await server.ros_list_capabilities()
+
+    assert result["status"] == "success"
+    assert result["view"] == "runtime control-plane"
+    assert result["managed_nodes"][0]["name"] == "observer"
+    assert result["agent_skills"] == ["detect", "pick", "place"]
+    assert any(topic["name"] == "/world_model/state" for topic in result["topics"])
+    assert any(topic["name"] == "/zone_events" for topic in result["topics"])
 
 
 @pytest.mark.asyncio

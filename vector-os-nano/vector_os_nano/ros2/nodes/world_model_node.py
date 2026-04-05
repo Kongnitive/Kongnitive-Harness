@@ -10,6 +10,9 @@ Services:
 Subscriptions:
     /joint_states   (sensor_msgs/JointState) — updates robot joint state
     /perception/detections (std_msgs/String) — JSON Detection list, updates objects
+
+Publications:
+    /world_model/state (std_msgs/String) — full world state JSON snapshot
 """
 from __future__ import annotations
 
@@ -47,6 +50,9 @@ class WorldModelServiceNode(Node):
 
         self._wm: WorldModel = world_model if world_model is not None else WorldModel()
 
+        # Publications
+        self._state_pub = self.create_publisher(String, "/world_model/state", 10)
+
         # Subscriptions
         self.create_subscription(
             JointState, "/joint_states", self._on_joint_states, 10
@@ -59,6 +65,7 @@ class WorldModelServiceNode(Node):
         self.create_service(Trigger, "/world_model/query", self._query_cb)
         self.create_service(Trigger, "/world_model/predicate", self._predicate_cb)
 
+        self._publish_state()
         self.get_logger().info("WorldModelServiceNode ready")
 
     # ------------------------------------------------------------------
@@ -71,6 +78,7 @@ class WorldModelServiceNode(Node):
             return
         positions = tuple(float(p) for p in msg.position)
         self._wm.update_robot_state(joint_positions=positions)
+        self._publish_state()
 
     def _on_detections(self, msg: String) -> None:
         """Parse JSON Detection list and update world model objects."""
@@ -99,6 +107,14 @@ class WorldModelServiceNode(Node):
                 self._wm.add_object(obj)
             except Exception as exc:
                 self.get_logger().warn(f"Failed to parse object state: {exc}")
+
+        self._publish_state()
+
+    def _publish_state(self) -> None:
+        """Publish the current world model state as a JSON snapshot."""
+        msg = String()
+        msg.data = json.dumps(self._wm.to_dict())
+        self._state_pub.publish(msg)
 
     # ------------------------------------------------------------------
     # Services

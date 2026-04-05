@@ -19,6 +19,7 @@ You are working with Kongnitive ROS2 EdgeMCP, a Jetson-based MCP server for AI-d
 ### Node Management Tools
 - `ros_push_node(node_name, script)` - Hot-swap a node
 - `ros_get_node_log(node_name, limit)` - Get real-time skill execution log from a node
+- `ros_list_capabilities()` - Get the runtime control-plane view for managed nodes, skills, and core topics
 - `ros_get_successful_node_examples(goal_filter, limit)` - Get successful hot-pushed node examples from the current session
 - `ros_write_successful_node_examples(node_name, goal, summary, tags, ...)` - Persist the current successful node as a reusable example
 - `ros_list_nodes()` - List running nodes
@@ -59,6 +60,8 @@ Not yet implemented:
 
 A vector-os-nano MuJoCo simulation agent is available in this process.
 Use it to execute real robot skills and get genuine success/failure feedback.
+The current runtime still uses a shared in-process MuJoCo agent singleton,
+but node-to-node coordination should prefer ROS2 topics and services.
 
 ### Autonomous Iteration Workflow
 
@@ -126,6 +129,7 @@ Important:
 - Per-step skill output lives in `ExecutionResult.trace[*].result_data`
 - Do not assume the top-level `ExecutionResult` contains every detail you need
 - When a task depends on color, side, or object identity, inspect `trace` and world model data before patching
+- For cross-node composition, publish/subscribe over ROS2 topics such as `/world_model/state` and `/zone_events`
 
 ### MuJoCo Sim Semantics
 

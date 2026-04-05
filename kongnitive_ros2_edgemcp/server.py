@@ -345,6 +345,44 @@ async def ros_list_nodes() -> dict:
 
 
 @mcp.tool()
+async def ros_list_capabilities() -> dict:
+    """
+    Get the runtime control-plane view exposed by this EdgeMCP process.
+
+    This tool reports only what the current runtime can directly observe:
+    managed hot-swapped nodes, local vector-os-nano skills, and the
+    core ROS topics this project uses for cross-node coordination.
+
+    Returns:
+        Dict with runtime-visible managed nodes, agent skills, and topics
+    """
+    from kongnitive_ros2_edgemcp.core.vector_bridge import get_agent  # noqa: PLC0415
+
+    nm = get_node_manager()
+    managed_nodes = await node_tools.ros_list_nodes(nm)
+    agent = get_agent()
+    topics = [
+        {
+            "name": "/world_model/state",
+            "type": "std_msgs/String",
+            "description": "World state snapshots published by the world model node.",
+        },
+        {
+            "name": "/zone_events",
+            "type": "std_msgs/String",
+            "description": "Zone change events published by observer-style nodes.",
+        },
+    ]
+    return {
+        "status": "success",
+        "view": "runtime control-plane",
+        "managed_nodes": managed_nodes.get("nodes", []),
+        "agent_skills": list(agent.skills),
+        "topics": topics,
+    }
+
+
+@mcp.tool()
 async def ros_get_node(node_name: str) -> dict:
     """
     Get the source code of a running node.
