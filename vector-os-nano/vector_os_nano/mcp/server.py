@@ -335,6 +335,72 @@ def create_sim_agent(headless: bool = True) -> Agent:
     return agent
 
 
+def create_go2_arm_sim_agent(headless: bool = True) -> Agent:
+    """Create an Agent with merged Go2 + SO-101 arm MuJoCo simulation.
+
+    The arm is mounted on Go2's back. A single physics instance drives both.
+    The returned Agent has arm skills + Go2 locomotion skills.
+
+    Args:
+        headless: If True (default), no MuJoCo viewer window.
+
+    Returns:
+        A fully connected Agent with both arm and Go2 skills.
+    """
+    from vector_os_nano.hardware.sim.mujoco_go2_with_arm import MuJoCoGo2WithArm  # noqa: PLC0415
+    from vector_os_nano.hardware.sim.mujoco_gripper import MuJoCoGripper  # noqa: PLC0415
+    from vector_os_nano.hardware.sim.mujoco_perception import MuJoCoPerception  # noqa: PLC0415
+    from vector_os_nano.perception.calibration import Calibration  # noqa: PLC0415
+    from vector_os_nano.skills.go2 import get_go2_skills  # noqa: PLC0415
+
+    _log(f"[MCP] Starting Go2+Arm MuJoCo simulation (headless={headless})...")
+
+    cfg = _load_config_with_fallback()
+
+    cfg.setdefault("skills", {}).setdefault("pick", {}).update(
+        {
+            "z_offset": 0.0,
+            "x_offset": 0.0,
+            "pre_grasp_height": 0.04,
+            "hardware_offsets": False,
+            "wrist_roll_offset": math.pi / 2,
+        }
+    )
+    cfg.setdefault("skills", {}).setdefault("home", {}).setdefault(
+        "joint_values", [0.0, 0.0, 0.0, 0.0, 0.0]
+    )
+    cfg["sim_move_duration"] = 3.0
+
+    combined = MuJoCoGo2WithArm(gui=not headless)
+    combined.connect()
+    _log(f"[MCP] Go2+Arm connected. Arm joints: {[round(j, 2) for j in combined.get_joint_positions()]}")
+
+    gripper = MuJoCoGripper(combined)
+    gripper.close()
+
+    objs = combined.get_object_positions()
+    if objs:
+        _log(f"[MCP] Scene objects: {', '.join(objs.keys())}")
+
+    perception = MuJoCoPerception(combined)
+    _log("[MCP] Sim perception ready (ground-truth mode).")
+
+    calibration = Calibration()
+
+    agent = Agent(
+        arm=combined,
+        base=combined,
+        gripper=gripper,
+        perception=perception,
+        skills=get_go2_skills(),
+        config=cfg,
+    )
+    agent._calibration = calibration
+
+    _log(f"[MCP] Go2+Arm agent ready. Skills: {agent.skills}")
+    return agent
+
+
 def create_hardware_agent() -> Agent:
     """Create an Agent with real SO-101 hardware.
 

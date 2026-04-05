@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C D:/Projects/edgemcp/kongnitive-ros2-edgemcp diff kongnitive_ros2_edgemcp/server.py)",
+      "Bash(python -m pytest tests/unit/test_world_model_state_topic.py -v)"
+    ]
+  }
+}

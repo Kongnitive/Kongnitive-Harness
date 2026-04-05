@@ -16,6 +16,7 @@ Usage in a hot-pushed node:
     result = self.agent.execute_skill("pick", {"object_label": "red_cube"})
 """
 
+import os
 import threading
 from typing import Any, Optional
 
@@ -42,8 +43,11 @@ def get_agent():
     """Get or lazily create the shared MuJoCo sim Agent.
 
     Thread-safe double-checked locking. The first call initialises
-    MuJoCo (headless) which takes ~2–5 s; subsequent calls return
+    MuJoCo (headless) which takes ~2-5 s; subsequent calls return
     immediately.
+
+    By default creates the merged Go2+Arm agent. Set environment
+    variable EDGEMCP_AGENT_MODE=arm_only to use the arm-only agent.
 
     Returns a thread-safe proxy that serializes execute_skill calls
     so concurrent ROS2 nodes don't corrupt physics state.
@@ -60,9 +64,16 @@ def get_agent():
     with _lock:
         if _agent is not None:
             return _agent
-        from vector_os_nano.mcp.server import create_sim_agent  # noqa: PLC0415
-        import os
+
         headless = os.environ.get("MUJOCO_HEADLESS", "1") == "1"
-        raw_agent = create_sim_agent(headless=headless)
+        mode = os.environ.get("EDGEMCP_AGENT_MODE", "go2_arm")
+
+        if mode == "arm_only":
+            from vector_os_nano.mcp.server import create_sim_agent  # noqa: PLC0415
+            raw_agent = create_sim_agent(headless=headless)
+        else:
+            from vector_os_nano.mcp.server import create_go2_arm_sim_agent  # noqa: PLC0415
+            raw_agent = create_go2_arm_sim_agent(headless=headless)
+
         _agent = _ThreadSafeAgentProxy(raw_agent)
     return _agent

@@ -19,7 +19,7 @@ Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代�
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Claude (AI Agent)                         │
-│  目标："把红色方块放到桌子左边，不能碰撞"                      │
+│  目标："让 Go2 巡逻到厨房，用臂抓取杯子放到岛台左边"          │
 └───────────┬─────────────────────────────────────────────────┘
             │ MCP (stdio)
             ▼
@@ -33,17 +33,17 @@ Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代�
 │  │ ros_get_node_log─┼──►│   NodeLogStore (per-node log) │   │
 │  │ patch_and_restart│   └───────────┬───────────────────┘   │
 │  │ ros_list_capab. │               │ executor spin          │
-│  │ ros_list_nodes   │               │ executor spin          │
-│  │ get_status       │               ▼                        │
-│  └──────────────────┘      ┌────────────────────┐           │
-│                             │  AI 生成的 ROS2 节点│           │
-│                             │  (每次迭代不同)     │           │
-│                             │  execute_skill(...) │           │
-│                             │  node_log(result)  │           │
+│  │ ros_list_nodes   │               ▼                        │
+│  │ get_status       │      ┌────────────────────┐           │
+│  └──────────────────┘      │  AI 生成的 ROS2 节点│           │
+│                             │  go2_patrol (巡逻)  │           │
+│                             │  arm_worker (操作)  │           │
+│                             │  observer (观察)    │           │
 │                             └────────┬───────────┘           │
 │                                      │ ROS2 topics           │
 │                                      ▼                       │
-│                           /world_model/state, /zone_events   │
+│              /go2/position  /arm/task_request  /zone_events  │
+│              /world_model/state      /arm/task_result         │
 └──────────────────────────────────────┼───────────────────────┘
                                        │ Python import (同进程)
                                        ▼
@@ -52,10 +52,21 @@ Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代�
 │                                                              │
 │  VectorBridge.get_agent()  ← 单例，进程级共享               │
 │  Agent.execute_skill(name, params)                           │
-│  MuJoCoArm + MuJoCoGripper + MuJoCoPerception               │
+│  MuJoCoGo2WithArm (Go2 四足 + SO-101 臂，单一物理实例)      │
+│  MuJoCoGripper + MuJoCoPerception                            │
 │  MuJoCo Physics Engine → 真实物理结果 (success/failure)      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+### Go2 + 臂合并仿真
+
+默认模式下，`get_agent()` 返回一个同时控制 Go2 四足和 SO-101 机械臂的 Agent：
+
+- 臂固定在 Go2 背部（`pos="0.1 0 0.08"`）
+- 单一 MuJoCo 物理实例，1kHz 物理线程同时驱动步态和关节
+- 物体放在 20m×14m 室内场景的厨房岛台上
+- Go2 技能（walk/navigate/patrol）和臂技能（pick/place/detect）共存于同一个 Agent
+- 异构节点通过 ROS2 topic 协调：巡逻节点只调移动技能，操作节点只调臂技能
 
 ## AI 自主迭代闭环
 
@@ -235,11 +246,42 @@ def create_node():
     return MyStrategyNode()
 ```
 
-可用技能：`pick` / `place` / `detect` / `scan` / `home` / `gripper_open` / `gripper_close`
+### 可用技能
 
-组合式观察节点示例见 `examples/observer_node.py`，它通过订阅 `/world_model/state`、发布 `/zone_events` 来接入系统，无需修改主控制节点。
+#### 臂技能
 
-完整执行技能示例见 `examples/vector_sim_demo_node.py`。
+| 技能 | 主要参数 | 说明 |
+|------|---------|------|
+| `pick` | `object_label, mode` | 检测并抓取物体。`mode='hold'` 保持夹持（后接 place 时必须用） |
+| `place` | `x, y, z` | 放置到世界坐标 |
+| `detect` | `query` | 检测匹配的物体 |
+| `scan` | — | 移动臂到观察位姿 |
+| `home` | — | 臂回到初始位置 |
+| `gripper_open` | — | 张开夹爪 |
+| `gripper_close` | — | 闭合夹爪 |
+
+#### Go2 移动技能
+
+| 技能 | 主要参数 | 说明 |
+|------|---------|------|
+| `walk` | `direction, distance` | 向指定方向行走 |
+| `turn` | `angle` | 原地转向（角度） |
+| `navigate` | `x, y` | 导航到世界坐标 |
+| `stand` | — | 站立 |
+| `sit` | — | 坐下 |
+| `lie_down` | — | 趴下 |
+| `stop` | — | 紧急停止 |
+| `where_am_i` | — | 报告当前位置和朝向 |
+| `patrol` | `waypoints` | 巡逻一组路径点 |
+
+### 示例节点
+
+| 文件 | 说明 |
+|------|------|
+| `examples/vector_sim_demo_node.py` | 完整臂操作示例（推荐起点） |
+| `examples/go2_patrol_node.py` | Go2 巡逻节点，发布位置到 `/go2/position` |
+| `examples/arm_worker_node.py` | 臂操作节点，订阅 `/arm/task_request` 执行 pick/place |
+| `examples/observer_node.py` | 观察节点，订阅 `/world_model/state`，发布 `/zone_events` |
 
 ## 热推机制
 
@@ -263,7 +305,7 @@ kongnitive-ros2-edgemcp/
 │   ├── core/
 │   │   ├── node_manager.py        # 热推引擎
 │   │   ├── node_log.py            # 节点执行日志 store
-│   │   ├── vector_bridge.py       # vector-os-nano Agent 单例
+│   │   ├── vector_bridge.py       # vector-os-nano Agent 单例（支持 go2_arm / arm_only）
 │   │   └── episode_manager.py     # 可复现 episode 循环
 │   ├── tools/
 │   │   ├── system_tools.py        # 系统监控
@@ -273,10 +315,25 @@ kongnitive-ros2-edgemcp/
 │       ├── server_config.yaml
 │       └── system_prompt.txt
 ├── examples/
-│   ├── vector_sim_demo_node.py    # MuJoCo 仿真控制示例（推荐起点）
+│   ├── vector_sim_demo_node.py    # MuJoCo 臂操作示例（推荐起点）
+│   ├── go2_patrol_node.py         # Go2 巡逻节点示例
+│   ├── arm_worker_node.py         # 臂操作 worker 节点示例
+│   ├── observer_node.py           # 观察节点示例
 │   └── detector_node.py           # 基础节点示例
+├── vector-os-nano/                # MuJoCo 仿真库（子目录）
+│   └── vector_os_nano/hardware/sim/
+│       ├── mujoco_go2_with_arm.py # Go2+臂合并控制器
+│       ├── mujoco_go2.py          # Go2 四足控制器
+│       └── mujoco_arm.py          # 单臂控制器
 └── README.md
 ```
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `EDGEMCP_AGENT_MODE` | `go2_arm` | `go2_arm` = Go2+臂合并 agent；`arm_only` = 仅臂 agent |
+| `MUJOCO_HEADLESS` | `1` | `1` = 无头模式；`0` = 打开 MuJoCo 可视化窗口 |
 
 ## 性能指标
 

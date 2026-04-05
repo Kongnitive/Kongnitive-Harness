@@ -233,3 +233,82 @@ When a similar task has already succeeded in the current session:
 1. Call `ros_get_successful_node_examples(goal_filter="blue bottle", limit=3)`
 2. Reuse the closest script and only patch the target object / target location
 3. Keep the logging structure intact so future iterations can reuse that node too
+
+---
+
+## Go2 + Arm Combined Agent
+
+The default `get_agent()` returns a single Agent that controls both the Go2 quadruped
+and the SO-101 arm mounted on its back. All skills (arm + Go2) are available from the
+same agent instance.
+
+### Go2 Locomotion Skills
+
+| Skill | Key Params | Description |
+|-------|-----------|-------------|
+| `walk` | `direction: str, distance: float` | Walk in a direction (forward/backward/left/right) |
+| `turn` | `angle: float` | Turn by angle in degrees |
+| `navigate` | `x: float, y: float` | Navigate to world coordinates |
+| `stand` | — | Stand up |
+| `sit` | — | Sit down |
+| `lie_down` | — | Lie down |
+| `stop` | — | Emergency stop |
+| `where_am_i` | — | Report current position and heading |
+| `look` | `direction: str` | Turn head/body to look in a direction |
+| `describe_scene` | — | Describe what the camera sees |
+| `explore` | `room: str` | Explore a named room |
+| `patrol` | `waypoints: list` | Patrol a sequence of waypoints |
+
+### Combined Node Template
+
+A single node can call both arm and Go2 skills:
+
+```python
+import rclpy
+from rclpy.node import Node
+from kongnitive_ros2_edgemcp.core.vector_bridge import get_agent
+from kongnitive_ros2_edgemcp.core.node_log import node_log
+
+NODE_NAME = "combined_demo"
+
+class CombinedNode(Node):
+    def __init__(self):
+        super().__init__('combined_demo')
+        self.agent = get_agent()
+        self.timer = self.create_timer(1.0, self._first_run)
+
+    def _first_run(self):
+        self.timer.cancel()
+        # Walk to the kitchen island
+        r = self.agent.execute_skill("walk", {"direction": "forward", "distance": 1.0})
+        node_log(NODE_NAME, {"skill": "walk", "success": r.success})
+        # Pick an object
+        r = self.agent.execute_skill("pick", {"object_label": "mug", "mode": "hold"})
+        node_log(NODE_NAME, {"skill": "pick", "success": r.success})
+
+def create_node():
+    return CombinedNode()
+```
+
+### Heterogeneous Node Coordination
+
+Different nodes can specialize in different roles while sharing the same agent:
+
+- **Go2 patrol node**: calls only locomotion skills, publishes position on `/go2/position`
+- **Arm worker node**: subscribes to `/arm/task_request`, executes pick/place, publishes result on `/arm/task_result`
+- **Coordinator node**: orchestrates the workflow via topic pub/sub
+
+Coordination topics (all `std_msgs/String` with JSON payloads):
+- `/go2/position` — Go2 publishes `{"x": ..., "y": ..., "heading": ...}`
+- `/arm/task_request` — coordinator publishes `{"action": "pick", "object": "mug", "place_at": [x, y, z]}`
+- `/arm/task_result` — arm worker publishes `{"action": "pick", "success": true/false}`
+
+The `_skill_lock` in `vector_bridge.py` ensures only one node executes a skill at a time,
+so concurrent nodes are safe — they just queue behind each other.
+
+### Environment Variables
+
+- `EDGEMCP_AGENT_MODE=go2_arm` (default) — merged Go2+Arm agent
+- `EDGEMCP_AGENT_MODE=arm_only` — arm-only agent (original behavior)
+- `MUJOCO_HEADLESS=1` (default) — no viewer window
+- `MUJOCO_HEADLESS=0` — open interactive MuJoCo viewer

@@ -3,6 +3,7 @@
 ## 目标
 
 给 AI 一个目标，AI 自主生成 ROS2 节点代码、热推执行、读取 MuJoCo 仿真反馈、迭代改进。
+默认模式下，MuJoCo 仿真包含 Go2 四足 + SO-101 机械臂的合并场景，Go2 负责巡逻移动，臂负责操作抓取，通过 ROS2 topic 协调。
 ROS2 负责节点间通信，EdgeMCP 负责热推、生命周期与运行时能力视图。
 **无需 Gazebo，无需 build，无需重启。**
 
@@ -42,10 +43,10 @@ pip3 install -e /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp/vector-os-nano[s
 cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
 pip3 install -e .
 
-# 验证 MuJoCo 可用
+# 验证 MuJoCo 可用（默认 Go2+臂合并模式）
 python3 -c "
-from vector_os_nano.mcp.server import create_sim_agent
-a = create_sim_agent(headless=True)
+from vector_os_nano.mcp.server import create_go2_arm_sim_agent
+a = create_go2_arm_sim_agent(headless=True)
 print('Skills:', a.skills)
 a.disconnect()
 "
@@ -290,22 +291,50 @@ def create_node():
 
 - 节点脚本**必须**定义 `create_node()` 并返回 `rclpy.node.Node` 实例
 - 节点脚本**必须**调用 `node_log()` 上报结果，否则 `ros_get_node_log` 返回空
-- `get_agent()` 返回进程级单例，所有节点共享同一个 MuJoCo 仿真实例
-- 节点间协作优先通过 ROS2 topic/service；当前核心 topic 包括 `/world_model/state` 和 `/zone_events`
+- `get_agent()` 返回进程级单例，所有节点共享同一个 MuJoCo 仿真实例（默认 Go2+臂合并）
+- 节点间协作优先通过 ROS2 topic/service；核心 topic 包括 `/world_model/state`、`/zone_events`、`/go2/position`、`/arm/task_request`、`/arm/task_result`
 - 热推新版本时，旧节点日志自动清空
 - `ros_get_successful_node_examples()` 会先查持久化成功模板，再查当前 session 成功节点，最后回退到内置 examples
 
 ## 可用技能
 
+### 臂技能
+
 | 技能 | 主要参数 | 说明 |
 |------|---------|------|
-| `pick` | `object_label: str` | 检测并抓取物体 |
-| `place` | `x, y, z: float` | 放置到世界坐标 |
-| `detect` | `query: str` | 检测匹配的物体 |
-| `scan` | — | 移动到扫描位置 |
-| `home` | — | 返回原位 |
+| `pick` | `object_label, mode` | 检测并抓取物体。`mode='hold'` 保持夹持 |
+| `place` | `x, y, z` | 放置到世界坐标 |
+| `detect` | `query` | 检测匹配的物体 |
+| `scan` | — | 移动臂到观察位姿 |
+| `home` | — | 臂回到初始位置 |
 | `gripper_open` | — | 张开夹爪 |
 | `gripper_close` | — | 闭合夹爪 |
+
+### Go2 移动技能
+
+| 技能 | 主要参数 | 说明 |
+|------|---------|------|
+| `walk` | `direction, distance` | 向指定方向行走 |
+| `turn` | `angle` | 原地转向 |
+| `navigate` | `x, y` | 导航到世界坐标 |
+| `stand` | — | 站立 |
+| `sit` | — | 坐下 |
+| `stop` | — | 紧急停止 |
+| `where_am_i` | — | 报告当前位置和朝向 |
+| `patrol` | `waypoints` | 巡逻一组路径点 |
+
+## 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `EDGEMCP_AGENT_MODE` | `go2_arm` | `go2_arm` = Go2+臂合并；`arm_only` = 仅臂 |
+| `MUJOCO_HEADLESS` | `1` | `1` = 无头；`0` = 可视化窗口 |
+
+如需仅使用臂模式（不含 Go2 四足）：
+
+```bash
+EDGEMCP_AGENT_MODE=arm_only python3 -m kongnitive_ros2_edgemcp.server
+```
 
 ## 观察节点示例
 
@@ -317,7 +346,50 @@ def create_node():
 
 它用于演示“新增节点通过协议接入系统”，而不是把所有逻辑都塞进同一个控制节点。
 
-## 多节点协作 Demo
+## Go2 + 臂协作 Demo
+
+这组步骤演示 Go2 巡逻 + 臂操作的异构节点协作。
+
+### 1) 推送巡逻节点
+
+```python
+ros_push_node("go2_patrol", open("examples/go2_patrol_node.py").read())
+```
+
+Go2 会依次导航到厨房岛台附近的 3 个路径点，并在 `/go2/position` 发布位置。
+
+### 2) 推送臂操作节点
+
+```python
+ros_push_node("arm_worker", open("examples/arm_worker_node.py").read())
+```
+
+臂节点订阅 `/arm/task_request`，等待任务指令。
+
+### 3) 发送操作指令
+
+通过 ROS2 topic 或协调节点发布任务：
+
+```bash
+# 在 WSL2 终端
+source /opt/ros/humble/setup.bash
+ros2 topic pub --once /arm/task_request std_msgs/String \
+  '{"data": "{\"action\": \"pick_and_place\", \"object\": \"mug\", \"place_at\": {\"x\": 0.0, \"y\": 0.25, \"z\": 0.05}}"}'
+```
+
+### 4) 查看执行结果
+
+```python
+ros_get_node_log("go2_patrol")   # 巡逻日志
+ros_get_node_log("arm_worker")   # 操作日志
+```
+
+协调 topic 一览：
+- `/go2/position` — Go2 位置（JSON）
+- `/arm/task_request` — 操作指令
+- `/arm/task_result` — 操作结果
+
+## 多节点协作 Demo（观察节点）
 
 这组步骤用于验证本轮新增的三项能力：
 
