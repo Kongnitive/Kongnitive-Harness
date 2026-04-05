@@ -146,6 +146,57 @@ Important:
 - After a task succeeds, call `ros_write_successful_node_examples(...)` so future sessions can reuse it
 - When diagnosing a failed action, read `trace[*].result_data` to distinguish perception failure, workspace failure, and place/IK failure
 
+### Verbose Logging Requirements
+
+Every node MUST use verbose logging to make iteration effective. Key rules:
+
+1. **Use a fixed NODE_NAME constant** — never use `self.get_name()` in `node_log()`, because the ROS node name and managed node name can differ:
+   ```python
+   NODE_NAME = "vector_demo"  # must match ros_push_node name
+   node_log(NODE_NAME, {...})  # always use the constant
+   ```
+
+2. **Start immediately** — use a 1s timer for first run, not 10s:
+   ```python
+   self.timer = self.create_timer(1.0, self._first_run)
+
+   def _first_run(self):
+       self.timer.cancel()
+       self._run_episode()
+       if not self._goal_done:
+           self.timer = self.create_timer(30.0, self._run_episode)
+   ```
+
+3. **Don't gate on detect result** — always proceed to pick regardless:
+   ```python
+   self._exec("detect", {"query": "green object"})  # no if-check
+   # proceed directly to pick loop
+   ```
+
+4. **Try multiple PICK_LABELS** — object labels vary; always use a fallback list:
+   ```python
+   PICK_LABELS = ["green object", "green cube", "cube", "green brick", "object"]
+   for label in self.PICK_LABELS:
+       if self._exec("pick", {"object_label": label}):
+           break
+   ```
+
+5. **Log every step with prefix tags** for easy scanning:
+   ```python
+   self.get_logger().info(f"[STEP] home")
+   self.get_logger().info(f"[PICK OK] label='{label}'")
+   self.get_logger().info(f"[PICK FAIL] label='{label}'")
+   self.get_logger().info(f"[PLACE OK] target={target}")
+   self.get_logger().info(f"[PLACE FAIL] reason={result.failure_reason}")
+   self.get_logger().info(f"[FAIL] All pick labels failed")
+   self.get_logger().info(f"[SUCCESS] Task complete!")
+   ```
+
+6. **Known reachable place coordinates** (IK-safe):
+   - `{"x": 0.00, "y": 0.25, "z": 0.05}` ✓ confirmed reachable (left side)
+   - `{"x": -0.25, "y": 0.0, "z": 0.05}` ✗ IK failure — do NOT use negative X
+   - Always try multiple targets in a loop with fallback positions
+
 ### Multi-Skill Sequence Example
 
 ```python
