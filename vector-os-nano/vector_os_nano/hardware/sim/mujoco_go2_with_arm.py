@@ -71,10 +71,10 @@ _CTRL_HZ: int = 200
 _CTRL_DECIM: int = _SIM_HZ // _CTRL_HZ
 _VIEWER_SYNC_EVERY: int = 8
 
-_GAIT_FREQ: float = 2.0
-_THIGH_AMP: float = 0.25
-_CALF_AMP: float = 0.25
-_HIP_AMP: float = 0.10
+_GAIT_FREQ: float = 1.2
+_THIGH_AMP: float = 0.18
+_CALF_AMP: float = 0.22
+_HIP_AMP: float = 0.05
 _CALF_PHASE: float = math.pi
 _TROT_PHASES: tuple[float, ...] = (0.0, math.pi, math.pi, 0.0)
 
@@ -86,6 +86,10 @@ _LIDAR_UPDATE_INTERVAL: int = 200
 
 # Arm home joint positions (5 controllable joints; jaw is visual only)
 _ARM_HOME_JOINTS: list[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
+_ARM_WALK_TUCK_JOINTS: list[float] = [0.0, -1.0, 1.3, -0.8, 0.0]
+_FORWARD_WALK_VX_MAX: float = 0.32
+_FORWARD_WALK_BURST: float = 0.35
+_FORWARD_WALK_PAUSE: float = 0.03
 _GO2_LEG_JOINT_NAMES: list[str] = [
     "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
     "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
@@ -483,13 +487,19 @@ def _compute_gait_targets(t: float, vx: float, vy: float, vyaw: float) -> np.nda
     omega = 2.0 * math.pi * _GAIT_FREQ
     fwd_amp = float(np.clip(vx / 0.5, -1.0, 1.0)) if abs(vx) > 0.01 else 0.0
     turn_amp = float(np.clip(vyaw / 1.0, -1.0, 1.0)) if abs(vyaw) > 0.01 else 0.0
+    forward_mode = fwd_amp >= 0.0
+    gait_phase_shift = math.pi if forward_mode and abs(fwd_amp) > 0.01 else 0.0
 
     for leg_idx in range(4):
         base = leg_idx * 3
-        phase = omega * t + _TROT_PHASES[leg_idx]
+        phase = omega * t + _TROT_PHASES[leg_idx] + gait_phase_shift
         is_left = leg_idx in (0, 2)
         leg_turn = -turn_amp if is_left else turn_amp
         total_amp = float(np.clip(fwd_amp + leg_turn, -1.5, 1.5))
+        if forward_mode and total_amp > 0.0:
+            total_amp *= 1.35
+        elif (not forward_mode) and total_amp < 0.0:
+            total_amp *= 0.65
 
         if abs(vy) > 0.01:
             q_target[base + 0] += _HIP_AMP * (vy / _VY_MAX) * math.sin(phase)
@@ -1158,12 +1168,100 @@ class MuJoCoGo2WithArm:
 
     def walk(self, vx: float = 0.0, vy: float = 0.0, vyaw: float = 0.0, duration: float = 2.0) -> bool:
         self._require_connection()
-        self.set_velocity(vx, vy, vyaw)
-        time.sleep(duration)
+        if vx < -0.01 and abs(vy) < 0.01 and abs(vyaw) < 0.01:
+            logger.warning(
+                "MuJoCoGo2WithArm.walk: backward walking is temporarily disabled while forward gait is being tuned"
+            )
+            return False
+        start_pos = self.get_position()
+        start_heading = self.get_heading()
+        requested_distance = math.hypot(vx, vy) * max(duration, 0.0)
+        restore_arm_joints: list[float] | None = None
+
+        # Start from a known stable posture when possible.
+        if not self._is_stance_close(np.array(_STAND_JOINTS, dtype=np.float64), z_min=0.2, z_max=0.45):
+            self.stand(duration=1.0)
+
+        if self.dof == len(_ARM_WALK_TUCK_JOINTS):
+            try:
+                restore_arm_joints = self.get_joint_positions()
+                self.move_joints(_ARM_WALK_TUCK_JOINTS, duration=0.8)
+            except Exception as exc:
+                logger.warning("MuJoCoGo2WithArm.walk: could not tuck arm before walking: %s", exc)
+
+        # The merged Go2+arm model is notably less stable than the arm-free Go2 model.
+        # Use conservative gait commands so the base can move without immediately collapsing.
+        # The merged Go2+arm model currently exhibits inverted fore/aft gait response:
+        # negative vx produces stable forward translation while positive vx mostly stalls.
+        # Flip only the base-frame x command here so the high-level "forward" skill matches
+        # the observed locomotion direction for this combined model.
+        cmd_vx = float(np.clip(-vx, -_FORWARD_WALK_VX_MAX, _FORWARD_WALK_VX_MAX))
+        cmd_vy = float(np.clip(vy, -0.12, 0.12))
+        cmd_vyaw = float(np.clip(vyaw, -0.5, 0.5))
+        deadline = time.monotonic() + max(duration, 0.0)
+        fell = False
+
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            burst = min(_FORWARD_WALK_BURST, max(remaining, 0.0))
+            self.set_velocity(cmd_vx, cmd_vy, cmd_vyaw)
+            time.sleep(burst)
+            self.set_velocity(0.0, 0.0, 0.0)
+            time.sleep(_FORWARD_WALK_PAUSE)
+            pos = self.get_position()
+            if pos[2] < 0.22:
+                fell = True
+                logger.warning(
+                    "MuJoCoGo2WithArm.walk: aborting early due to low base height z=%.3f",
+                    pos[2],
+                )
+                break
+
         self.set_velocity(0.0, 0.0, 0.0)
         time.sleep(0.2)
-        pos = self.get_position()
-        return bool(pos[2] > 0.15)
+
+        end_pos = self.get_position()
+        end_heading = self.get_heading()
+        displacement = math.hypot(end_pos[0] - start_pos[0], end_pos[1] - start_pos[1])
+        heading_cos = math.cos(start_heading)
+        heading_sin = math.sin(start_heading)
+        forward_progress = (
+            (end_pos[0] - start_pos[0]) * heading_cos
+            + (end_pos[1] - start_pos[1]) * heading_sin
+        )
+
+        recovered = self.stand(duration=1.0)
+        final_pos = self.get_position()
+        heading_delta = abs(end_heading - start_heading)
+        final_z = final_pos[2]
+
+        moved_enough = (
+            forward_progress >= max(0.015, requested_distance * 0.06)
+            and displacement >= 0.015
+        )
+        stable_enough = recovered and final_z >= 0.22 and heading_delta <= math.pi
+        if not stable_enough:
+            logger.warning(
+                "MuJoCoGo2WithArm.walk: unstable end state displacement=%.3f z=%.3f heading_delta=%.3f recovered=%s fell=%s",
+                displacement,
+                final_z,
+                heading_delta,
+                recovered,
+                fell,
+            )
+        if not moved_enough:
+            logger.info(
+                "MuJoCoGo2WithArm.walk: insufficient forward progress displacement=%.3f forward_progress=%.3f requested=%.3f",
+                displacement,
+                forward_progress,
+                requested_distance,
+            )
+        if restore_arm_joints is not None:
+            try:
+                self.move_joints(restore_arm_joints, duration=0.8)
+            except Exception as exc:
+                logger.warning("MuJoCoGo2WithArm.walk: could not restore arm after walking: %s", exc)
+        return bool((not fell) and moved_enough and stable_enough)
 
     # ------------------------------------------------------------------
     # PD interpolation (synchronous, physics thread paused)
