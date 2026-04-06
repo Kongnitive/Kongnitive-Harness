@@ -2,6 +2,8 @@
 
 **Simulation-in-the-Loop 具身智能闭环开发系统 — Harness Engineering for Robot AI**
 
+**Kongnitive = Kong + Cognitive，搭好 Harness，智能交给 AI。**
+
 > **近期计划**：当前实现以 ROS2 + MuJoCo 为载体完成 MVP 验证。近期将对整体架构进行重构，使 Harness 层与底层通信框架（ROS2）和仿真后端解耦，具备更广泛的适用性。
 
 > 这是个人业余时间的探索项目，进度和更新节奏以兴趣驱动为主。
