@@ -1,4 +1,4 @@
-# Kongnitive ROS2 EdgeMCP — Quick Start
+# Kongnitive Harness — Quick Start
 
 ## 目标
 

@@ -1,4 +1,4 @@
-# Kongnitive ROS2 EdgeMCP
+# Kongnitive Harness
 
 **Simulation-in-the-Loop 具身智能闭环开发系统 — Harness Engineering for Robot AI**
 
