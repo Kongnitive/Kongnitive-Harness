@@ -152,6 +152,13 @@ class NodeManager:
                 # 5. Add to executor (hot-swap!)
                 self.executor.add_node(node_instance)
 
+                # Clear stale logs so AI only sees output from this version
+                try:
+                    from kongnitive_ros2_edgemcp.core.node_log import clear_logs  # noqa: PLC0415
+                    clear_logs(node_name)
+                except Exception:
+                    pass
+
                 # Register
                 self.nodes[node_name] = {
                     'instance': node_instance,
@@ -316,6 +323,40 @@ class NodeManager:
             return stop_result
 
         return await self.start_node(node_name)
+
+    async def delete_node(self, node_name: str) -> Dict[str, Any]:
+        """
+        Delete a node: stop it if running, then remove its saved script.
+
+        Args:
+            node_name: Node identifier
+
+        Returns:
+            Status dict
+        """
+        was_running = node_name in self.nodes
+        if was_running:
+            await self._unload_node(node_name)
+
+        script_path = Path(self.script_dir) / f"{node_name}.py"
+        script_deleted = False
+        if script_path.exists():
+            script_path.unlink()
+            script_deleted = True
+
+        if not was_running and not script_deleted:
+            return {
+                "status": "error",
+                "message": f"Node '{node_name}' not found (not running and no saved script)",
+            }
+
+        return {
+            "status": "success",
+            "node_name": node_name,
+            "was_running": was_running,
+            "script_deleted": script_deleted,
+            "message": f"Node '{node_name}' deleted",
+        }
 
     def shutdown(self):
         """Shutdown the NodeManager and all nodes."""

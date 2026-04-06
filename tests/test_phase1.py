@@ -6,6 +6,7 @@ Basic tests for NodeManager and MCP tools.
 
 import pytest
 import asyncio
+import sys
 from pathlib import Path
 
 
@@ -156,6 +157,49 @@ def test_example_planner_node():
     assert "import rclpy" in content
 
 
+def test_example_observer_node():
+    """Test observer example exposes the world-state subscription pattern."""
+    from pathlib import Path
+
+    observer_path = Path(__file__).parent.parent / "examples" / "observer_node.py"
+    assert observer_path.exists()
+
+    content = observer_path.read_text(encoding="utf-8")
+    assert "def create_node()" in content
+    assert "class ObserverNode" in content
+    assert '"/world_model/state"' in content
+    assert '"/zone_events"' in content
+    assert "node_log" in content
+
+
+def test_example_go2_patrol_node_uses_turn_and_walk_skills():
+    """Go2 patrol example should use concrete locomotion skills, not navigate(x, y)."""
+    patrol_path = Path(__file__).parent.parent / "examples" / "go2_patrol_node.py"
+    assert patrol_path.exists()
+
+    content = patrol_path.read_text(encoding="utf-8")
+    assert 'def create_node()' in content
+    assert 'class Go2PatrolNode' in content
+    assert '"turn",' in content
+    assert '"walk",' in content
+    assert 'execute_skill("navigate"' not in content
+    assert '"/go2/position"' in content
+
+
+def test_example_arm_worker_requires_place_at():
+    """Arm worker example should require explicit place_at coordinates."""
+    worker_path = Path(__file__).parent.parent / "examples" / "arm_worker_node.py"
+    assert worker_path.exists()
+
+    content = worker_path.read_text(encoding="utf-8")
+    assert 'def create_node()' in content
+    assert 'class ArmWorkerNode' in content
+    assert 'task.get("place_at")' in content
+    assert "PLACE_TARGET" not in content
+    assert '"/arm/task_request"' in content
+    assert '"/arm/task_result"' in content
+
+
 def test_config_files_exist():
     """Test configuration files exist."""
     from pathlib import Path
@@ -207,6 +251,182 @@ logging:
     config = load_server_config()
     assert config["server"]["log_level"] == "DEBUG"
     assert config["logging"]["default_limit"] == 7
+
+
+def test_success_example_store_roundtrip(tmp_path):
+    """Test successful example persistence helpers."""
+    from kongnitive_ros2_edgemcp.core.success_examples import (
+        build_example,
+        filter_examples,
+        get_store_path,
+        load_examples,
+        upsert_example,
+    )
+
+    store_path = get_store_path(tmp_path / "nodes")
+    example = build_example(
+        node_name="demo",
+        script="def create_node():\n    pass\n",
+        script_path=str(tmp_path / "nodes" / "demo.py"),
+        recent_logs=[{"skill": "pick", "success": True}],
+        source="manual",
+        goal="pick place red lego",
+        summary="demo summary",
+        tags=["lego"],
+    )
+    upsert_example(store_path, example)
+
+    persisted = load_examples(store_path)
+    assert len(persisted) == 1
+    assert persisted[0]["node_name"] == "demo"
+    assert persisted[0]["has_goal_success"] is False
+
+    filtered = filter_examples(persisted, goal_filter="lego", limit=3)
+    assert len(filtered) == 1
+    assert filtered[0]["goal"] == "pick place red lego"
+
+
+@pytest.mark.asyncio
+async def test_ros_get_successful_node_examples_accepts_non_goal_success(tmp_path, monkeypatch):
+    """Test retrieval works for success logs even without a goal entry."""
+    from kongnitive_ros2_edgemcp import server
+    from kongnitive_ros2_edgemcp.core.node_log import clear_logs, node_log
+
+    script_dir = tmp_path / "nodes"
+    script_dir.mkdir()
+    (script_dir / "demo.py").write_text(
+        "import rclpy\n"
+        "from rclpy.node import Node\n\n"
+        "class Demo(Node):\n"
+        "    def __init__(self):\n"
+        "        super().__init__('demo')\n\n"
+        "def create_node():\n"
+        "    return Demo()\n",
+        encoding="utf-8",
+    )
+    node_log("demo", {"skill": "pick", "success": True, "failure_reason": None})
+
+    class FakeNodeManager:
+        def __init__(self, script_dir):
+            self.script_dir = script_dir
+
+    monkeypatch.setattr(server, "get_node_manager", lambda: FakeNodeManager(script_dir))
+    result = await server.ros_get_successful_node_examples(goal_filter="pick", limit=5)
+
+    assert result["status"] == "success"
+    assert result["count"] >= 1
+    assert any(item["node_name"] == "demo" for item in result["examples"])
+    assert any(item["source"] == "session" for item in result["examples"])
+    clear_logs("demo")
+
+
+@pytest.mark.asyncio
+async def test_ros_write_successful_node_examples_persists_current_node(tmp_path, monkeypatch):
+    """Test explicit persistence tool writes the current successful node example."""
+    from kongnitive_ros2_edgemcp import server
+    from kongnitive_ros2_edgemcp.core.node_log import clear_logs, node_log
+    from kongnitive_ros2_edgemcp.core.success_examples import get_store_path, load_examples
+
+    script_dir = tmp_path / "nodes"
+    script_dir.mkdir()
+    script_path = script_dir / "demo.py"
+    script_path.write_text(
+        "import rclpy\n"
+        "from rclpy.node import Node\n\n"
+        "class Demo(Node):\n"
+        "    def __init__(self):\n"
+        "        super().__init__('demo')\n\n"
+        "def create_node():\n"
+        "    return Demo()\n",
+        encoding="utf-8",
+    )
+    node_log("demo", {"skill": "goal", "success": True})
+
+    class FakeNodeManager:
+        def __init__(self, script_dir):
+            self.script_dir = script_dir
+
+    async def fake_ros_get_node(_nm, node_name):
+        return {
+            "status": "success",
+            "node_name": node_name,
+            "script": script_path.read_text(encoding="utf-8"),
+            "script_path": str(script_path),
+        }
+
+    monkeypatch.setattr(server, "get_node_manager", lambda: FakeNodeManager(script_dir))
+    monkeypatch.setattr(server.node_tools, "ros_get_node", fake_ros_get_node)
+
+    result = await server.ros_write_successful_node_examples(
+        node_name="demo",
+        goal="pick place red lego left table",
+        summary="stable success",
+        tags=["lego", "left"],
+    )
+
+    assert result["status"] == "success"
+    store_path = get_store_path(script_dir)
+    persisted = load_examples(store_path)
+    assert len(persisted) == 1
+    assert persisted[0]["goal"] == "pick place red lego left table"
+    assert persisted[0]["has_goal_success"] is True
+    clear_logs("demo")
+
+
+@pytest.mark.asyncio
+async def test_ros_list_capabilities_returns_runtime_view(monkeypatch):
+    """Test runtime capability view combines managed nodes and local skills."""
+    from types import SimpleNamespace
+
+    class FakeFastMCP:
+        def __init__(self, _name):
+            pass
+
+        def tool(self):
+            def decorator(func):
+                return func
+            return decorator
+
+        def run(self, **_kwargs):
+            return None
+
+    monkeypatch.setitem(sys.modules, "fastmcp", SimpleNamespace(FastMCP=FakeFastMCP))
+    from kongnitive_ros2_edgemcp import server
+
+    class FakeNodeManager:
+        async def list_nodes(self):
+            return {
+                "status": "success",
+                "count": 1,
+                "nodes": [
+                    {
+                        "name": "observer",
+                        "ros_node_name": "observer",
+                        "namespace": "/",
+                        "script_path": "/tmp/observer.py",
+                    }
+                ],
+            }
+
+    class FakeAgent:
+        skills = ["detect", "pick", "place"]
+
+    monkeypatch.setattr(server, "get_node_manager", lambda: FakeNodeManager())
+    monkeypatch.setattr(
+        "kongnitive_ros2_edgemcp.core.vector_bridge.get_agent",
+        lambda: FakeAgent(),
+    )
+
+    result = await server.ros_list_capabilities()
+
+    assert result["status"] == "success"
+    assert result["view"] == "runtime control-plane"
+    assert result["managed_nodes"][0]["name"] == "observer"
+    assert result["agent_skills"] == ["detect", "pick", "place"]
+    assert any(topic["name"] == "/go2/position" for topic in result["topics"])
+    assert any(topic["name"] == "/arm/task_request" for topic in result["topics"])
+    assert any(topic["name"] == "/arm/task_result" for topic in result["topics"])
+    assert any(topic["name"] == "/world_model/state" for topic in result["topics"])
 
 
 @pytest.mark.asyncio

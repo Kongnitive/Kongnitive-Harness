@@ -106,3 +106,17 @@ async def ros_restart_node(node_manager, node_name: str) -> Dict[str, Any]:
         Status dict
     """
     return await node_manager.restart_node(node_name)
+
+
+async def ros_delete_node(node_manager, node_name: str) -> Dict[str, Any]:
+    """
+    Delete a node: stop if running and remove saved script.
+
+    Args:
+        node_manager: NodeManager instance
+        node_name: Node identifier
+
+    Returns:
+        Status dict
+    """
+    return await node_manager.delete_node(node_name)
