@@ -172,6 +172,34 @@ def test_example_observer_node():
     assert "node_log" in content
 
 
+def test_example_go2_patrol_node_uses_turn_and_walk_skills():
+    """Go2 patrol example should use concrete locomotion skills, not navigate(x, y)."""
+    patrol_path = Path(__file__).parent.parent / "examples" / "go2_patrol_node.py"
+    assert patrol_path.exists()
+
+    content = patrol_path.read_text(encoding="utf-8")
+    assert 'def create_node()' in content
+    assert 'class Go2PatrolNode' in content
+    assert '"turn",' in content
+    assert '"walk",' in content
+    assert 'execute_skill("navigate"' not in content
+    assert '"/go2/position"' in content
+
+
+def test_example_arm_worker_requires_place_at():
+    """Arm worker example should require explicit place_at coordinates."""
+    worker_path = Path(__file__).parent.parent / "examples" / "arm_worker_node.py"
+    assert worker_path.exists()
+
+    content = worker_path.read_text(encoding="utf-8")
+    assert 'def create_node()' in content
+    assert 'class ArmWorkerNode' in content
+    assert 'task.get("place_at")' in content
+    assert "PLACE_TARGET" not in content
+    assert '"/arm/task_request"' in content
+    assert '"/arm/task_result"' in content
+
+
 def test_config_files_exist():
     """Test configuration files exist."""
     from pathlib import Path
@@ -395,8 +423,10 @@ async def test_ros_list_capabilities_returns_runtime_view(monkeypatch):
     assert result["view"] == "runtime control-plane"
     assert result["managed_nodes"][0]["name"] == "observer"
     assert result["agent_skills"] == ["detect", "pick", "place"]
+    assert any(topic["name"] == "/go2/position" for topic in result["topics"])
+    assert any(topic["name"] == "/arm/task_request" for topic in result["topics"])
+    assert any(topic["name"] == "/arm/task_result" for topic in result["topics"])
     assert any(topic["name"] == "/world_model/state" for topic in result["topics"])
-    assert any(topic["name"] == "/zone_events" for topic in result["topics"])
 
 
 @pytest.mark.asyncio

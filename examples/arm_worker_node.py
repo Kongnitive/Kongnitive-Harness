@@ -15,7 +15,6 @@ from kongnitive_ros2_edgemcp.core.node_log import node_log
 NODE_NAME = "arm_worker"
 
 PICK_LABELS = ["lego", "mug", "banana", "bottle", "duck", "screwdriver"]
-PLACE_TARGET = {"x": 0.00, "y": 0.25, "z": 0.05}
 
 
 class ArmWorkerNode(Node):
@@ -37,16 +36,27 @@ class ArmWorkerNode(Node):
 
         action = task.get("action", "pick_and_place")
         obj_label = task.get("object", PICK_LABELS[0])
-        place_at = task.get("place_at", PLACE_TARGET)
+        place_at = task.get("place_at")
 
         self.get_logger().info(f"[TASK] {action} object='{obj_label}'")
+
+        if place_at is None:
+            reason = "Task request must include place_at in arm base-frame coordinates"
+            node_log(NODE_NAME, {"skill": "goal", "success": False, "failure_reason": reason})
+            self._publish_result(action, obj_label, False, reason)
+            self.get_logger().error(f"[ERROR] {reason}")
+            return
 
         # Home first
         self.agent.execute_skill("home", {})
 
         # Detect
         det = self.agent.execute_skill("detect", {"query": obj_label})
-        node_log(NODE_NAME, {"skill": "detect", "success": det.success})
+        node_log(NODE_NAME, {
+            "skill": "detect",
+            "success": det.success,
+            "failure_reason": det.failure_reason,
+        })
 
         # Pick
         pick = self.agent.execute_skill("pick", {"object_label": obj_label, "mode": "hold"})
@@ -72,7 +82,11 @@ class ArmWorkerNode(Node):
         # Home
         self.agent.execute_skill("home", {})
 
-        node_log(NODE_NAME, {"skill": "goal", "success": place.success})
+        node_log(NODE_NAME, {
+            "skill": "goal",
+            "success": place.success,
+            "failure_reason": place.failure_reason,
+        })
         self.get_logger().info(f"[{'SUCCESS' if place.success else 'FAIL'}] {action} {obj_label}")
 
     def _publish_result(self, action, obj, success, reason=None):

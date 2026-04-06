@@ -285,7 +285,7 @@ def create_sim_agent(headless: bool = True) -> Agent:
     from vector_os_nano.hardware.sim.mujoco_perception import MuJoCoPerception  # noqa: PLC0415
     from vector_os_nano.perception.calibration import Calibration  # noqa: PLC0415
 
-    _log(f"[MCP] Starting MuJoCo simulation (headless={headless})...")
+    _log(f"[MCP] Starting MuJoCo arm-only simulation (headless={headless})...")
 
     cfg = _load_config_with_fallback()
 
@@ -331,7 +331,7 @@ def create_sim_agent(headless: bool = True) -> Agent:
     )
     agent._calibration = calibration
 
-    _log(f"[MCP] Sim agent ready. Skills: {agent.skills}")
+    _log(f"[MCP] Arm-only sim agent ready. Skills: {agent.skills}")
     return agent
 
 
@@ -579,12 +579,12 @@ async def main() -> None:
     if args.hardware:
         agent = create_hardware_agent()
     elif args.sim:
-        agent = create_sim_agent(headless=False)
+        agent = create_go2_arm_sim_agent(headless=False)
     elif args.sim_headless:
-        agent = create_sim_agent(headless=True)
+        agent = create_go2_arm_sim_agent(headless=True)
     else:
-        # Default: sim with viewer
-        agent = create_sim_agent(headless=False)
+        # Default: merged Go2+arm sim with viewer
+        agent = create_go2_arm_sim_agent(headless=False)
 
     server = VectorMCPServer(agent)
     try:

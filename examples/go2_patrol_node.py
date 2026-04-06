@@ -6,6 +6,7 @@ Hot-push with:
 Publishes JSON on /go2/position after each move.
 """
 import json
+import math
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -14,11 +15,11 @@ from kongnitive_ros2_edgemcp.core.node_log import node_log
 
 NODE_NAME = "go2_patrol"
 
-# Kitchen island area waypoints (IK-safe for arm reach)
+# Waypoints around the flat arena (objects are scattered at x=0.8~1.5, y=-0.4~0.5)
 WAYPOINTS = [
-    {"x": 16.0, "y": 1.8},   # in front of island
-    {"x": 17.5, "y": 1.8},   # right side of island
-    {"x": 16.0, "y": 3.5},   # behind island
+    {"x":  1.0, "y":  0.0},   # approach objects
+    {"x":  1.5, "y":  0.5},   # right flank
+    {"x":  1.0, "y": -0.5},   # left flank
 ]
 
 
@@ -41,14 +42,18 @@ class Go2PatrolNode(Node):
             return
 
         for i, wp in enumerate(WAYPOINTS):
-            self.get_logger().info(f"[NAV] Moving to waypoint {i}: ({wp['x']}, {wp['y']})")
-            result = self.agent.execute_skill("navigate", wp)
+            self.get_logger().info(f"[PATROL] Moving to waypoint {i}: ({wp['x']}, {wp['y']})")
+            result = self._move_to_waypoint(wp)
             node_log(NODE_NAME, {
-                "skill": "navigate",
+                "skill": "walk",
                 "success": result.success,
                 "failure_reason": result.failure_reason,
                 "waypoint": wp,
             })
+            if not result.success:
+                node_log(NODE_NAME, {"skill": "goal", "success": False, "failure_reason": result.failure_reason})
+                self.get_logger().error(f"[FAIL] Waypoint {i} failed: {result.failure_reason}")
+                return
 
             # Publish position
             pos = self.agent.get_position()
@@ -61,6 +66,47 @@ class Go2PatrolNode(Node):
         self._done = True
         node_log(NODE_NAME, {"skill": "goal", "success": True, "status": "patrol complete"})
         self.get_logger().info("[SUCCESS] Patrol complete")
+
+    def _move_to_waypoint(self, waypoint):
+        pos = self.agent.get_position()
+        heading = self.agent.get_heading()
+        dx = float(waypoint["x"] - pos[0])
+        dy = float(waypoint["y"] - pos[1])
+        distance = math.hypot(dx, dy)
+        if distance < 0.05:
+            return self.agent.execute_skill("where_am_i", {})
+
+        target_heading = math.atan2(dy, dx)
+        delta = self._normalize_angle(target_heading - heading)
+        if abs(delta) > math.radians(5.0):
+            turn_result = self.agent.execute_skill(
+                "turn",
+                {
+                    "direction": "left" if delta >= 0 else "right",
+                    "angle": math.degrees(abs(delta)),
+                },
+            )
+            node_log(NODE_NAME, {
+                "skill": "turn",
+                "success": turn_result.success,
+                "failure_reason": turn_result.failure_reason,
+                "waypoint": waypoint,
+            })
+            if not turn_result.success:
+                return turn_result
+
+        return self.agent.execute_skill(
+            "walk",
+            {"direction": "forward", "distance": distance, "speed": 0.3},
+        )
+
+    @staticmethod
+    def _normalize_angle(angle):
+        while angle > math.pi:
+            angle -= 2.0 * math.pi
+        while angle < -math.pi:
+            angle += 2.0 * math.pi
+        return angle
 
 
 def create_node():

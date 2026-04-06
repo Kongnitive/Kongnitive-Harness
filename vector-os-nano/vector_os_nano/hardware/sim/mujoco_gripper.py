@@ -11,6 +11,7 @@ alignment issues with 5-DOF arms).
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -57,19 +58,21 @@ class MuJoCoGripper:
 
     def open(self) -> bool:
         """Open the gripper and release any held object."""
-        self._is_open = True
-        self._release_all()
-        self._animate_jaw(_JAW_VISUAL_OPEN)
-        logger.debug("MuJoCoGripper: open (released %s)", self._held_object)
-        self._held_object = None
+        with self._simulation_guard():
+            self._is_open = True
+            self._release_all()
+            self._animate_jaw(_JAW_VISUAL_OPEN)
+            logger.debug("MuJoCoGripper: open (released %s)", self._held_object)
+            self._held_object = None
         return True
 
     def close(self) -> bool:
         """Close the gripper. If an object is within grasp range, attach it."""
-        self._is_open = False
-        self._animate_jaw(_JAW_VISUAL_CLOSED)
-        self._try_grasp()
-        logger.debug("MuJoCoGripper: close (holding=%s)", self._held_object)
+        with self._simulation_guard():
+            self._is_open = False
+            self._animate_jaw(_JAW_VISUAL_CLOSED)
+            self._try_grasp()
+            logger.debug("MuJoCoGripper: close (holding=%s)", self._held_object)
         return True
 
     def is_holding(self) -> bool:
@@ -87,6 +90,20 @@ class MuJoCoGripper:
     # ------------------------------------------------------------------
     # Internal: weld constraint grasping
     # ------------------------------------------------------------------
+
+    @contextmanager
+    def _simulation_guard(self):
+        """Pause threaded simulation while mutating welds or stepping the model."""
+        was_running = bool(getattr(self._arm, "_running", False))
+        pause = getattr(self._arm, "_pause_physics", None)
+        resume = getattr(self._arm, "_resume_physics", None)
+        if was_running and callable(pause):
+            pause()
+        try:
+            yield
+        finally:
+            if was_running and callable(resume):
+                resume()
 
     def _try_grasp(self) -> None:
         """Find nearest object within grasp radius and enable its weld constraint."""

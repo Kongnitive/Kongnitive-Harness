@@ -75,7 +75,7 @@ _GAIT_FREQ: float = 2.0
 _THIGH_AMP: float = 0.25
 _CALF_AMP: float = 0.25
 _HIP_AMP: float = 0.10
-_CALF_PHASE: float = 0.0
+_CALF_PHASE: float = math.pi
 _TROT_PHASES: tuple[float, ...] = (0.0, math.pi, math.pi, 0.0)
 
 _VX_MAX: float = 0.8
@@ -84,111 +84,147 @@ _VYAW_MAX: float = 4.0
 
 _LIDAR_UPDATE_INTERVAL: int = 200
 
-# Arm home joint positions (all zeros = straight up)
-_ARM_HOME_JOINTS: list[float] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+# Arm home joint positions (5 controllable joints; jaw is visual only)
+_ARM_HOME_JOINTS: list[float] = [0.0, 0.0, 0.0, 0.0, 0.0]
+_GO2_LEG_JOINT_NAMES: list[str] = [
+    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
+    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
+    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
+    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
+]
 _ARM_JOINT_NAMES: list[str] = [
     "shoulder_pan", "shoulder_lift", "elbow_flex",
-    "wrist_flex", "wrist_roll", "jaw_visual_joint",
+    "wrist_flex", "wrist_roll",
 ]
 _ARM_ACTUATOR_NAMES: list[str] = [
     "act_shoulder_pan", "act_shoulder_lift", "act_elbow_flex",
-    "act_wrist_flex", "act_wrist_roll", "act_jaw_visual",
+    "act_wrist_flex", "act_wrist_roll",
+]
+_JAW_VISUAL_JOINT_NAME: str = "jaw_visual_joint"
+_JAW_VISUAL_ACTUATOR_NAME: str = "act_jaw_visual"
+_EE_SITE_NAME: str = "ee_site"
+
+# IK defaults copied from MuJoCoArm for skill compatibility.
+_IK_MAX_ITER: int = 100
+_IK_TOL: float = 1e-3
+_IK_STEP_SIZE: float = 0.5
+_IK_DAMPING: float = 1e-4
+
+# Objects scattered on the ground near Go2 start position.
+# Positions are in world frame; z=0.02 keeps objects just above the floor.
+_OBJECT_SURFACE_Z = 0.02
+_OBJECTS_ON_ISLAND: list[dict] = [
+    {"name": "banana",      "pos": f"1.2  0.3 {_OBJECT_SURFACE_Z}", "rgba": "1.0 0.9 0.2 1",   "mesh": "banana_mesh",      "mass": "0.020"},
+    {"name": "mug",         "pos": f"1.0 -0.4 {_OBJECT_SURFACE_Z}", "rgba": "0.85 0.15 0.15 1", "mesh": "mug_mesh",         "mass": "0.030"},
+    {"name": "bottle",      "pos": f"1.5  0.0 {_OBJECT_SURFACE_Z}", "rgba": "0.2 0.4 0.9 1",   "mesh": "bottle_mesh",      "mass": "0.025"},
+    {"name": "screwdriver", "pos": f"0.8  0.5 {_OBJECT_SURFACE_Z}", "rgba": "0.1 0.7 0.2 1",   "mesh": "screwdriver_mesh", "mass": "0.015"},
+    {"name": "duck",        "pos": f"1.3 -0.2 {_OBJECT_SURFACE_Z}", "rgba": "1.0 0.6 0.1 1",   "mesh": "duck_mesh",        "mass": "0.020"},
+    {"name": "lego",        "pos": f"0.9  0.1 {_OBJECT_SURFACE_Z}", "rgba": "0.95 0.2 0.2 1",  "mesh": "lego_mesh",        "mass": "0.008"},
 ]
 
-# Objects placed on kitchen island (surface z ≈ 0.915)
-_OBJECT_SURFACE_Z = 0.94
-_OBJECTS_ON_ISLAND: list[dict] = [
-    {"name": "banana",      "pos": "17.2 2.6 {z}", "rgba": "1.0 0.9 0.2 1",  "mesh": "banana_mesh",      "mass": "0.020"},
-    {"name": "mug",         "pos": "16.8 2.9 {z}", "rgba": "0.85 0.15 0.15 1","mesh": "mug_mesh",         "mass": "0.030"},
-    {"name": "bottle",      "pos": "17.4 3.0 {z}", "rgba": "0.2 0.4 0.9 1",  "mesh": "bottle_mesh",      "mass": "0.025"},
-    {"name": "screwdriver", "pos": "16.6 2.7 {z}", "rgba": "0.1 0.7 0.2 1",  "mesh": "screwdriver_mesh", "mass": "0.015"},
-    {"name": "duck",        "pos": "17.0 2.5 {z}", "rgba": "1.0 0.6 0.1 1",  "mesh": "duck_mesh",        "mass": "0.020"},
-    {"name": "lego",        "pos": "17.3 2.7 {z}", "rgba": "0.95 0.2 0.2 1", "mesh": "lego_mesh",        "mass": "0.008"},
-]
+# Go2 start position in the flat arena
+_GO2_START: tuple[float, float, float] = (0.0, 0.0, 0.35)
 
 
 # ---------------------------------------------------------------------------
-# Scene XML builder
+# Scene XML builder — minimal flat arena (replaces heavy house scene)
 # ---------------------------------------------------------------------------
 
 def _build_go2_with_arm_scene_xml() -> Path:
-    """Build merged Go2 + arm room scene via runtime XML assembly.
+    """Build merged Go2 + arm scene: flat arena + scattered objects.
 
     Strategy:
-    1. Read go2.xml, find the closing </body> of base_link, inject arm body tree
-    2. Read go2_room.xml template, replace <include> with the modified go2 XML
-    3. Append arm mesh assets, arm actuators, weld constraints, and objects
+    1. Read go2.xml, inject arm body tree into base_link
+    2. Assemble a minimal <mujoco> XML from scratch (no go2_room.xml)
+       — just a flat floor, sky, and the Go2+arm model
+    3. Append arm mesh assets, arm actuators, weld constraints, objects
     """
     go2_xml_path = _MJCF_DIR / "go2.xml"
-    go2_assets_dir = _MJCF_DIR / "assets"
+    go2_assets_dir = str((_MJCF_DIR / "assets")).replace("\\", "/")
     arm_mesh_dir_str = str(_ARM_MESH_DIR).replace("\\", "/")
 
-    # --- Step 1: Build arm body subtree (to nest inside Go2 base_link) ---
+    # --- Step 1: Build arm body subtree, inject into go2.xml ---
     arm_body = _build_arm_body_xml(arm_mesh_dir_str)
-
-    # --- Step 2: Read go2.xml and inject arm into base_link ---
     go2_raw = go2_xml_path.read_text(encoding="utf-8")
     go2_modified = _inject_arm_into_go2(go2_raw, arm_body)
 
-    # --- Step 3: Read room template, inline the modified Go2 ---
-    room_raw = _ROOM_XML.read_text(encoding="utf-8")
-
-    # The room template has:
-    #   <compiler ... meshdir="GO2_ASSETS_DIR" .../>
-    #   <include file="GO2_MODEL_PATH"/>
-    # We replace meshdir and remove the <include>, inlining go2 content instead.
-    room_xml = room_raw.replace("GO2_ASSETS_DIR", str(go2_assets_dir).replace("\\", "/"))
-
-    # Remove the <include file="GO2_MODEL_PATH"/> line
-    room_xml = re.sub(r'\s*<include\s+file="GO2_MODEL_PATH"\s*/>', "", room_xml)
-
-    # --- Step 4: Inject go2 content (defaults, assets, worldbody, actuators, sensors) ---
-    # Extract sections from modified go2 XML
-    go2_defaults = _extract_section(go2_modified, "default")
-    go2_assets = _extract_section(go2_modified, "asset")
+    # --- Step 2: Extract sections from modified go2 XML ---
+    go2_defaults_inner = _extract_defaults_inner(go2_modified)
+    go2_assets_inner_xml = _extract_section_inner(go2_modified, "asset")
     go2_worldbody_inner = _extract_worldbody_inner(go2_modified)
     go2_actuators = _extract_section(go2_modified, "actuator")
     go2_sensors = _extract_section(go2_modified, "sensor")
     go2_keyframe = _extract_section(go2_modified, "keyframe")
 
-    # Build arm-specific additions
+    # --- Step 3: Arm-specific additions ---
+    arm_defaults_inner = _extract_defaults_inner(_ARM_XML.read_text(encoding="utf-8"))
     arm_assets_xml = _build_arm_assets_xml(arm_mesh_dir_str)
     arm_actuators_xml = _build_arm_actuators_xml()
     arm_weld_xml = _build_weld_constraints_xml()
     objects_xml = _build_objects_xml()
 
-    # Insert go2 defaults after the room's <option> line
-    room_xml = room_xml.replace(
-        '<option cone="elliptic" impratio="100"/>',
-        '<option cone="elliptic" impratio="100"/>\n\n' + go2_defaults,
-    )
+    x0, y0, z0 = _GO2_START
 
-    # Insert go2 assets + arm assets into the room's <asset> block (before closing </asset>)
-    room_xml = room_xml.replace(
-        "</asset>",
-        go2_assets_inner(go2_assets) + "\n" + arm_assets_xml + "\n  </asset>",
-    )
+    scene = f"""<mujoco model="go2_with_arm_arena">
+  <compiler angle="radian" meshdir="{go2_assets_dir}" autolimits="true"/>
 
-    # Insert go2 worldbody (base_link + legs + arm) + objects into room's <worldbody>
-    # Find the last </body> before </worldbody> and insert after it
-    room_xml = room_xml.replace(
-        "</worldbody>",
-        "\n    <!-- Go2 + Arm -->\n" + go2_worldbody_inner + "\n\n"
-        + "    <!-- Graspable objects on kitchen island -->\n" + objects_xml + "\n\n"
-        + "  </worldbody>",
-    )
+  <option cone="elliptic" impratio="100"/>
 
-    # Insert actuators, sensors, equality, keyframe before closing </mujoco>
-    room_xml = room_xml.replace(
-        "</mujoco>",
-        "\n" + go2_actuators + "\n\n" + arm_actuators_xml + "\n\n"
-        + go2_sensors + "\n\n" + arm_weld_xml + "\n\n"
-        + go2_keyframe + "\n\n</mujoco>",
-    )
+  <statistic center="{x0} {y0} 0.5" extent="4"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="-120" elevation="-25"/>
+    <quality shadowsize="2048"/>
+  </visual>
+
+  <default>
+    {go2_defaults_inner}
+    <!-- SO-101 arm defaults -->
+    {arm_defaults_inner}
+  </default>
+
+  <asset>
+    <texture type="skybox" builtin="gradient"
+             rgb1="0.88 0.90 0.95" rgb2="0.65 0.70 0.80" width="512" height="3072"/>
+    <texture type="2d" name="floor_tex" builtin="checker"
+             rgb1="0.82 0.78 0.70" rgb2="0.70 0.66 0.58" width="300" height="300"/>
+    <material name="floor_mat" texture="floor_tex" texrepeat="4 4" reflectance="0.1"/>
+    {go2_assets_inner_xml}
+    {arm_assets_xml}
+  </asset>
+
+  <worldbody>
+    <!-- Flat arena floor — 10m × 10m -->
+    <geom name="floor" type="plane" size="5 5 0.1" material="floor_mat"
+          condim="3" friction="0.8 0.02 0.01"/>
+    <!-- Light -->
+    <light name="sun" pos="0 0 4" dir="0 0 -1" directional="true"
+           diffuse="0.8 0.8 0.8" specular="0.2 0.2 0.2" castshadow="true"/>
+
+    <!-- Go2 + Arm -->
+    {go2_worldbody_inner}
+
+    <!-- Graspable objects on the ground -->
+    {objects_xml}
+  </worldbody>
+
+  {go2_actuators}
+
+  {arm_actuators_xml}
+
+  {go2_sensors}
+
+  {arm_weld_xml}
+
+  {go2_keyframe}
+
+</mujoco>"""
 
     out = _MJCF_DIR / "scene_go2_with_arm.xml"
-    out.write_text(room_xml, encoding="utf-8")
-    logger.info("Built merged Go2+Arm scene: %s", out)
+    out.write_text(scene, encoding="utf-8")
+    logger.info("Built Go2+Arm flat-arena scene: %s", out)
     return out
 
 
@@ -291,17 +327,17 @@ def _build_weld_constraints_xml() -> str:
 
 
 def _build_objects_xml() -> str:
-    """Build free-body objects placed on the kitchen island."""
+    """Build free-body objects scattered on the ground."""
     lines = []
     for obj in _OBJECTS_ON_ISLAND:
         name = obj["name"]
-        pos = obj["pos"].format(z=_OBJECT_SURFACE_Z)
+        pos = obj["pos"]   # already a complete position string
         rgba = obj["rgba"]
         mesh = obj["mesh"]
         mass = obj["mass"]
 
         if name == "lego":
-            # Lego uses box + cylinder studs (same as so101_mujoco.xml)
+            # Lego uses box + cylinder studs (no mesh)
             lines.append(f'    <body name="{name}" pos="{pos}">')
             lines.append(f'      <freejoint name="{name}_free"/>')
             lines.append(f'      <geom name="lego_base" type="box" size="0.016 0.008 0.006"')
@@ -324,17 +360,90 @@ def _build_objects_xml() -> str:
 # XML parsing helpers
 # ---------------------------------------------------------------------------
 
+def _extract_section_inner(xml: str, tag: str) -> str:
+    """Extract inner content of <tag>...</tag>, stripping the outer tags."""
+    full = _extract_section(xml, tag)
+    if not full:
+        return ""
+    inner_m = re.match(rf"<{re.escape(tag)}[^>]*>(.*)</{re.escape(tag)}>", full, re.DOTALL)
+    return inner_m.group(1).strip() if inner_m else ""
+
+
 def _extract_section(xml: str, tag: str) -> str:
-    """Extract a top-level <tag>...</tag> section from XML."""
-    pattern = rf"(<{tag}[\s>].*?</{tag}>)"
-    m = re.search(pattern, xml, re.DOTALL)
-    return m.group(1) if m else ""
+    """Extract a top-level <tag>...</tag> section from XML.
+
+    Uses depth counting so nested identical tags (e.g. <default class="x">
+    nested inside <default>) are handled correctly. The naive regex .*? with
+    re.DOTALL stops at the first closing tag and produces malformed XML.
+    """
+    # Find the opening tag
+    m = re.search(rf"<{re.escape(tag)}[\s>]", xml)
+    if not m:
+        return ""
+    start = m.start()
+    depth = 0
+    i = start
+    while i < len(xml):
+        if xml[i] != "<":
+            i += 1
+            continue
+        # Check for closing tag
+        close_m = re.match(rf"</{re.escape(tag)}>", xml[i:])
+        if close_m:
+            depth -= 1
+            if depth == 0:
+                return xml[start:i + close_m.end()]
+            i += close_m.end()
+            continue
+        # Check for opening tag (not self-closing)
+        open_m = re.match(rf"<{re.escape(tag)}[\s>]", xml[i:])
+        if open_m:
+            # Self-closing: <tag ... />
+            tag_end = xml.index(">", i)
+            if xml[tag_end - 1] == "/":
+                i = tag_end + 1
+                continue
+            depth += 1
+            i += open_m.end()
+            continue
+        i += 1
+    return ""
+
+
+def _extract_defaults_inner(xml: str) -> str:
+    """Extract the inner content of the top-level <default>...</default> block,
+    excluding the outer wrapper tags. Used to merge arm defaults into go2 defaults."""
+    full = _extract_section(xml, "default")
+    if not full:
+        return ""
+    inner_m = re.match(r"<default[^>]*>(.*)</default>", full, re.DOTALL)
+    return inner_m.group(1).strip() if inner_m else ""
 
 
 def _extract_worldbody_inner(xml: str) -> str:
-    """Extract inner content of <worldbody>...</worldbody>."""
-    m = re.search(r"<worldbody[^>]*>(.*?)</worldbody>", xml, re.DOTALL)
-    return m.group(1).strip() if m else ""
+    """Extract inner content of <worldbody>...</worldbody>.
+
+    Uses depth counting to handle nested bodies correctly.
+    """
+    full = _extract_section(xml, "worldbody")
+    if not full:
+        return ""
+    inner_m = re.match(r"<worldbody[^>]*>(.*)</worldbody>", full, re.DOTALL)
+    return inner_m.group(1).strip() if inner_m else ""
+
+
+
+    """Extract inner content of <worldbody>...</worldbody>.
+
+    Uses depth counting to handle nested <worldbody> if any, though in
+    practice MuJoCo MJCF only has one. Avoids the re.DOTALL .*? truncation bug.
+    """
+    full = _extract_section(xml, "worldbody")
+    if not full:
+        return ""
+    # Strip outer <worldbody ...> and </worldbody>
+    inner_m = re.match(r"<worldbody[^>]*>(.*)</worldbody>", full, re.DOTALL)
+    return inner_m.group(1).strip() if inner_m else ""
 
 
 def _extract_body_tree(xml: str, body_name: str) -> str:
@@ -442,15 +551,22 @@ class MuJoCoGo2WithArm:
         self._gui: bool = gui
         self._room: bool = room
         self._mj: _Go2Model | None = None
+        self._model: Any = None
+        self._data: Any = None
         self._viewer: Any = None
         self._connected: bool = False
+        self._sim_lock: threading.RLock = threading.RLock()
 
-        # Arm joint/actuator IDs (cached on connect)
+        # Joint/actuator IDs (cached on connect)
+        self._go2_leg_joint_ids: list[int] = []
+        self._go2_leg_qpos_adrs: list[int] = []
+        self._go2_leg_qvel_adrs: list[int] = []
         self._arm_joint_ids: list[int] = []
         self._arm_act_ids: list[int] = []
+        self._ee_site_id: int = -1
 
-        # Go2 qpos layout: [0:3]=pos, [3:7]=quat, [7:19]=leg joints
-        # Arm joints come after Go2's 12 leg joints in qpos
+        # Arm joint offsets are discovered dynamically because the merged XML
+        # injection changes qpos ordering; do not assume legs occupy qpos[7:19].
         self._arm_qpos_start: int = 0  # set on connect
         self._arm_qvel_start: int = 0
 
@@ -466,6 +582,11 @@ class MuJoCoGo2WithArm:
         # Object tracking for perception
         self._object_names: list[str] = [o["name"] for o in _OBJECTS_ON_ISLAND]
 
+        # Render helpers (created lazily)
+        self._renderers: dict[tuple[str, int, int], Any] = {}
+        self._cam_renderer: Any = None
+        self._cam_obj: Any = None
+
     # ------------------------------------------------------------------
     # Capability properties
     # ------------------------------------------------------------------
@@ -473,6 +594,14 @@ class MuJoCoGo2WithArm:
     @property
     def name(self) -> str:
         return "mujoco_go2_with_arm"
+
+    @property
+    def joint_names(self) -> list[str]:
+        return list(_ARM_JOINT_NAMES)
+
+    @property
+    def dof(self) -> int:
+        return len(_ARM_JOINT_NAMES)
 
     @property
     def supports_holonomic(self) -> bool:
@@ -494,8 +623,11 @@ class MuJoCoGo2WithArm:
         model = mj.MjModel.from_xml_path(str(scene_path))
         data = mj.MjData(model)
         self._mj = _Go2Model(model, data)
+        self._model = model
+        self._data = data
 
-        # Cache arm joint and actuator IDs
+        # Cache arm and Go2 leg joint IDs plus actuator IDs
+        self._go2_leg_joint_ids = []
         self._arm_joint_ids = []
         self._arm_act_ids = []
         for jname in _ARM_JOINT_NAMES:
@@ -503,6 +635,11 @@ class MuJoCoGo2WithArm:
             if jid < 0:
                 raise RuntimeError(f"Arm joint '{jname}' not found in merged scene")
             self._arm_joint_ids.append(jid)
+        for jname in _GO2_LEG_JOINT_NAMES:
+            jid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_JOINT, jname)
+            if jid < 0:
+                raise RuntimeError(f"Go2 leg joint '{jname}' not found in merged scene")
+            self._go2_leg_joint_ids.append(jid)
 
         for aname in _ARM_ACTUATOR_NAMES:
             aid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_ACTUATOR, aname)
@@ -510,22 +647,30 @@ class MuJoCoGo2WithArm:
                 raise RuntimeError(f"Arm actuator '{aname}' not found in merged scene")
             self._arm_act_ids.append(aid)
 
+        self._go2_leg_qpos_adrs = [model.jnt_qposadr[jid] for jid in self._go2_leg_joint_ids]
+        self._go2_leg_qvel_adrs = [model.jnt_dofadr[jid] for jid in self._go2_leg_joint_ids]
+
         # Determine arm qpos/qvel offsets
-        # Go2 freejoint: 7 qpos (3 pos + 4 quat) + 12 leg joints = qpos[0:19]
-        # Arm joints follow after Go2's joints
         first_arm_jid = self._arm_joint_ids[0]
         self._arm_qpos_start = model.jnt_qposadr[first_arm_jid]
         self._arm_qvel_start = model.jnt_dofadr[first_arm_jid]
+        self._ee_site_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_SITE, _EE_SITE_NAME)
+        if self._ee_site_id < 0:
+            raise RuntimeError(f"Site '{_EE_SITE_NAME}' not found in merged scene")
 
-        # Place Go2 in the kitchen area (near the island with objects)
-        data.qpos[0] = 16.0   # x — in front of kitchen island
-        data.qpos[1] = 1.8    # y — facing the island
-        data.qpos[2] = 0.35   # z — standing height
+        # Place Go2 at arena start position
+        data.qpos[0] = _GO2_START[0]
+        data.qpos[1] = _GO2_START[1]
+        data.qpos[2] = _GO2_START[2]
         # Set standing leg joints
-        data.qpos[7:19] = _STAND_JOINTS
+        for adr, pos in zip(self._go2_leg_qpos_adrs, _STAND_JOINTS):
+            data.qpos[adr] = pos
         # Set arm to home position
         for i, jid in enumerate(self._arm_joint_ids):
             data.qpos[model.jnt_qposadr[jid]] = _ARM_HOME_JOINTS[i]
+        jaw_aid = mj.mj_name2id(model, mj.mjtObj.mjOBJ_ACTUATOR, _JAW_VISUAL_ACTUATOR_NAME)
+        if jaw_aid >= 0:
+            data.ctrl[jaw_aid] = 0.8
 
         model.opt.timestep = _SIM_DT
         mj.mj_forward(model, data)
@@ -538,7 +683,7 @@ class MuJoCoGo2WithArm:
                 )
                 if self._viewer is not None:
                     self._viewer.cam.type = mj.mjtCamera.mjCAMERA_FREE
-                    self._viewer.cam.lookat[:] = [16.0, 3.0, 0.5]
+                    self._viewer.cam.lookat[:] = [0.5, 0.0, 0.3]
                     self._viewer.cam.distance = 5.0
                     self._viewer.cam.elevation = -35
                     self._viewer.cam.azimuth = -90
@@ -568,7 +713,23 @@ class MuJoCoGo2WithArm:
             except Exception:
                 pass
             self._viewer = None
+        for renderer in self._renderers.values():
+            try:
+                renderer.close()
+            except Exception:
+                pass
+        self._renderers.clear()
+        if self._cam_renderer is not None:
+            try:
+                self._cam_renderer.close()
+            except Exception:
+                pass
+        self._cam_renderer = None
+        self._cam_obj = None
         self._mj = None
+        self._model = None
+        self._data = None
+        self._ee_site_id = -1
         self._connected = False
 
     def _require_connection(self) -> None:
@@ -605,12 +766,12 @@ class MuJoCoGo2WithArm:
             with self._cmd_lock:
                 vx, vy, vyaw = self._cmd_vel
 
-            time_now = float(self._mj.data.time)
+            time_now = float(self._data.time)
             is_moving = (vx != 0.0 or vy != 0.0 or vyaw != 0.0)
 
             if sim_step % _CTRL_DECIM == 0:
-                q_cur = np.array(self._mj.data.qpos[7:19], dtype=np.float64)
-                dq_cur = np.array(self._mj.data.qvel[6:18], dtype=np.float64)
+                q_cur = self._get_go2_leg_qpos()
+                dq_cur = self._get_go2_leg_qvel()
 
                 if is_moving:
                     q_target = _compute_gait_targets(time_now, vx, vy, vyaw)
@@ -624,9 +785,10 @@ class MuJoCoGo2WithArm:
             # Arm actuators are position-controlled (MuJoCo handles PD internally)
             # — no explicit torque computation needed; ctrl values set by set_joint_positions()
 
-            mj.mj_step1(self._mj.model, self._mj.data)
-            self._mj.set_joint_torque(tau_hold)
-            mj.mj_step2(self._mj.model, self._mj.data)
+            with self._sim_lock:
+                mj.mj_step1(self._model, self._data)
+                self._mj.set_joint_torque(tau_hold)
+                mj.mj_step2(self._model, self._data)
 
             self._update_odometry()
 
@@ -650,11 +812,11 @@ class MuJoCoGo2WithArm:
     # ------------------------------------------------------------------
 
     def get_joint_positions(self) -> list[float]:
-        """Return arm joint positions (6 DOF)."""
+        """Return arm joint positions (5 controllable DOF)."""
         self._require_connection()
-        model = self._mj.model
-        return [float(self._mj.data.qpos[model.jnt_qposadr[jid]])
-                for jid in self._arm_joint_ids]
+        with self._sim_lock:
+            return [float(self._data.qpos[self._model.jnt_qposadr[jid]])
+                    for jid in self._arm_joint_ids]
 
     def set_joint_positions(
         self,
@@ -663,37 +825,183 @@ class MuJoCoGo2WithArm:
     ) -> None:
         """Set arm joint target positions via position actuators."""
         self._require_connection()
-        for i, aid in enumerate(self._arm_act_ids):
-            if i < len(positions):
-                self._mj.data.ctrl[aid] = float(positions[i])
+        with self._sim_lock:
+            for i, aid in enumerate(self._arm_act_ids):
+                if i < len(positions):
+                    self._data.ctrl[aid] = float(positions[i])
+
+    def move_joints(
+        self,
+        positions: list[float],
+        duration: float = 3.0,
+    ) -> bool:
+        """Move to target joint positions over duration seconds."""
+        self._require_connection()
+        if len(positions) != self.dof:
+            raise ValueError(
+                f"MuJoCoGo2WithArm.move_joints: expected {self.dof} positions, "
+                f"got {len(positions)}"
+            )
+
+        mj = _get_mujoco()
+        was_running = self._running
+        if was_running:
+            self._pause_physics()
+
+        dt = self._model.opt.timestep
+        steps = max(1, int(duration / dt))
+        sync_interval = max(1, int(1.0 / 60.0 / dt))
+        start = [float(self._data.ctrl[aid]) for aid in self._arm_act_ids]
+
+        try:
+            if self._viewer is not None:
+                wall_start = time.monotonic()
+                for i in range(steps):
+                    t = (i + 1) / steps
+                    with self._sim_lock:
+                        for act_id, s, g in zip(self._arm_act_ids, start, positions):
+                            self._data.ctrl[act_id] = s + t * (g - s)
+                        mj.mj_step(self._model, self._data)
+                    if i % sync_interval == 0:
+                        self._viewer.sync()
+                        sim_elapsed = (i + 1) * dt
+                        wall_elapsed = time.monotonic() - wall_start
+                        sleep = sim_elapsed - wall_elapsed
+                        if sleep > 0:
+                            time.sleep(sleep)
+            else:
+                for i in range(steps):
+                    t = (i + 1) / steps
+                    with self._sim_lock:
+                        for act_id, s, g in zip(self._arm_act_ids, start, positions):
+                            self._data.ctrl[act_id] = s + t * (g - s)
+                        mj.mj_step(self._model, self._data)
+        finally:
+            if was_running:
+                self._resume_physics()
+
+        return True
+
+    def fk(
+        self,
+        joint_positions: list[float],
+    ) -> tuple[list[float], list[list[float]]]:
+        """Forward kinematics via MuJoCo, matching MuJoCoArm semantics."""
+        self._require_connection()
+        mj = _get_mujoco()
+
+        with self._sim_lock:
+            old_qpos = self._data.qpos.copy()
+            old_qvel = self._data.qvel.copy()
+            try:
+                for i, pos in enumerate(joint_positions):
+                    self._data.joint(_ARM_JOINT_NAMES[i]).qpos[0] = pos
+                mj.mj_forward(self._model, self._data)
+                ee_pos = list(self._data.site_xpos[self._ee_site_id].copy())
+                ee_rot = self._data.site_xmat[self._ee_site_id].reshape(3, 3).tolist()
+                return ee_pos, ee_rot
+            finally:
+                self._data.qpos[:] = old_qpos
+                self._data.qvel[:] = old_qvel
+                mj.mj_forward(self._model, self._data)
+
+    def ik(
+        self,
+        target_xyz: tuple[float, float, float],
+        current_joints: list[float] | None = None,
+    ) -> list[float] | None:
+        """Inverse kinematics using the same damped least-squares solver as MuJoCoArm."""
+        self._require_connection()
+        mj = _get_mujoco()
+        target = np.array(target_xyz, dtype=np.float64)
+
+        with self._sim_lock:
+            old_qpos = self._data.qpos.copy()
+            old_qvel = self._data.qvel.copy()
+            try:
+                seed = current_joints if current_joints is not None else self.get_joint_positions()
+                for i, pos in enumerate(seed):
+                    self._data.joint(_ARM_JOINT_NAMES[i]).qpos[0] = pos
+
+                arm_qpos_adrs = [
+                    self._model.jnt_qposadr[jid] for jid in self._arm_joint_ids
+                ]
+                arm_dof_adrs = [
+                    self._model.jnt_dofadr[jid] for jid in self._arm_joint_ids
+                ]
+
+                for _ in range(_IK_MAX_ITER):
+                    mj.mj_forward(self._model, self._data)
+                    ee_pos = self._data.site_xpos[self._ee_site_id].copy()
+                    err = target - ee_pos
+                    if np.linalg.norm(err) < _IK_TOL:
+                        return [float(self._data.qpos[adr]) for adr in arm_qpos_adrs]
+
+                    jacp = np.zeros((3, self._model.nv), dtype=np.float64)
+                    mj.mj_jacSite(self._model, self._data, jacp, None, self._ee_site_id)
+                    J = jacp[:, arm_dof_adrs]
+                    JJt = J @ J.T + _IK_DAMPING * np.eye(3)
+                    dq = J.T @ np.linalg.solve(JJt, err)
+
+                    for i, adr in enumerate(arm_qpos_adrs):
+                        self._data.qpos[adr] += _IK_STEP_SIZE * dq[i]
+                        lo = self._model.jnt_range[self._arm_joint_ids[i], 0]
+                        hi = self._model.jnt_range[self._arm_joint_ids[i], 1]
+                        self._data.qpos[adr] = float(np.clip(self._data.qpos[adr], lo, hi))
+                return None
+            finally:
+                self._data.qpos[:] = old_qpos
+                self._data.qvel[:] = old_qvel
+                mj.mj_forward(self._model, self._data)
 
     def get_object_positions(self) -> dict[str, tuple[float, float, float]]:
         """Return world positions of all graspable objects (ground truth)."""
         self._require_connection()
         mj = _get_mujoco()
         result = {}
-        for name in self._object_names:
-            bid = mj.mj_name2id(self._mj.model, mj.mjtObj.mjOBJ_BODY, name)
-            if bid >= 0:
-                pos = self._mj.data.xpos[bid]
-                result[name] = (float(pos[0]), float(pos[1]), float(pos[2]))
+        with self._sim_lock:
+            for name in self._object_names:
+                bid = mj.mj_name2id(self._model, mj.mjtObj.mjOBJ_BODY, name)
+                if bid >= 0:
+                    pos = self._data.xpos[bid]
+                    result[name] = (float(pos[0]), float(pos[1]), float(pos[2]))
         return result
 
     def get_ee_position(self) -> tuple[float, float, float]:
         """Return end-effector position in world frame."""
         self._require_connection()
-        mj = _get_mujoco()
-        site_id = mj.mj_name2id(self._mj.model, mj.mjtObj.mjOBJ_SITE, "ee_site")
-        if site_id >= 0:
-            pos = self._mj.data.site_xpos[site_id]
+        with self._sim_lock:
+            pos = self._data.site_xpos[self._ee_site_id]
             return (float(pos[0]), float(pos[1]), float(pos[2]))
-        return (0.0, 0.0, 0.0)
+
+    def render(
+        self,
+        camera_name: str = "overhead",
+        width: int = 640,
+        height: int = 480,
+    ) -> Any:
+        """Render an RGB image compatible with MuJoCoArm.render()."""
+        self._require_connection()
+        mj = _get_mujoco()
+        key = (camera_name, width, height)
+
+        with self._sim_lock:
+            renderer = self._renderers.get(key)
+            if renderer is None:
+                renderer = mj.Renderer(self._model, height=height, width=width)
+                self._renderers[key] = renderer
+
+            camera = self._make_render_camera(camera_name)
+            renderer.update_scene(self._data, camera=camera)
+            rgb = renderer.render()
+            return np.ascontiguousarray(rgb[:, :, ::-1])
 
     def stop(self) -> None:
         """Emergency stop — zero Go2 velocity and hold arm position."""
         self._require_connection()
         with self._cmd_lock:
             self._cmd_vel = (0.0, 0.0, 0.0)
+        self.set_joint_positions(self.get_joint_positions())
 
     # ------------------------------------------------------------------
     # BaseProtocol — locomotion
@@ -710,16 +1018,19 @@ class MuJoCoGo2WithArm:
 
     def get_position(self) -> list[float]:
         self._require_connection()
-        return list(self._mj.data.qpos[0:3].astype(float))
+        with self._sim_lock:
+            return list(self._data.qpos[0:3].astype(float))
 
     def get_velocity(self) -> list[float]:
         self._require_connection()
-        return list(self._mj.data.qvel[0:3].astype(float))
+        with self._sim_lock:
+            return list(self._data.qvel[0:3].astype(float))
 
     def get_heading(self) -> float:
         self._require_connection()
-        w, x, y, z = self._mj.data.qpos[3:7]
-        return float(math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
+        with self._sim_lock:
+            w, x, y, z = self._data.qpos[3:7]
+            return float(math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z)))
 
     def get_odometry(self) -> Any:
         self._require_connection()
@@ -762,8 +1073,48 @@ class MuJoCoGo2WithArm:
         self._cam_obj.azimuth = math.degrees(heading) + 180
         self._cam_obj.elevation = -5
 
-        self._cam_renderer.update_scene(self._mj.data, camera=self._cam_obj)
-        return self._cam_renderer.render().copy()
+        with self._sim_lock:
+            self._cam_renderer.update_scene(self._data, camera=self._cam_obj)
+            return self._cam_renderer.render().copy()
+
+    def _make_render_camera(self, camera_name: str) -> Any:
+        """Return a MuJoCo camera config for named renders."""
+        mj = _get_mujoco()
+        if camera_name == "front":
+            return self._make_front_render_camera()
+
+        cam = mj.MjvCamera()
+        cam.type = mj.mjtCamera.mjCAMERA_FREE
+
+        if camera_name == "overhead":
+            cam.lookat[:] = [17.0, 2.8, 0.9]
+            cam.distance = 3.0
+            cam.azimuth = 180
+            cam.elevation = -70
+        elif camera_name == "side":
+            cam.lookat[:] = [17.0, 2.8, 0.9]
+            cam.distance = 3.0
+            cam.azimuth = 90
+            cam.elevation = -20
+        else:
+            raise ValueError(f"Unknown render camera: {camera_name}")
+        return cam
+
+    def _make_front_render_camera(self) -> Any:
+        """Build a free camera aligned with the robot heading for front renders."""
+        mj = _get_mujoco()
+        heading = self.get_heading()
+        cos_h = math.cos(heading)
+        sin_h = math.sin(heading)
+        pos = self.get_position()
+
+        cam = mj.MjvCamera()
+        cam.type = mj.mjtCamera.mjCAMERA_FREE
+        cam.lookat[:] = [pos[0] + cos_h * 2.0, pos[1] + sin_h * 2.0, pos[2] + 0.25]
+        cam.distance = 2.0
+        cam.azimuth = math.degrees(heading) + 180
+        cam.elevation = -5
+        return cam
 
     # ------------------------------------------------------------------
     # Posture commands (Go2)
@@ -771,18 +1122,39 @@ class MuJoCoGo2WithArm:
 
     def stand(self, duration: float = 2.0) -> bool:
         self._require_connection()
-        self._pd_interpolate(np.array(_STAND_JOINTS, dtype=np.float64), duration)
-        return True
+        target = np.array(_STAND_JOINTS, dtype=np.float64)
+        self._pd_interpolate(target, duration)
+        if self._is_stance_close(target):
+            return True
+        logger.warning(
+            "MuJoCoGo2WithArm.stand: PD posture did not converge; applying hard stance reset"
+        )
+        self._force_leg_posture(target)
+        return self._is_stance_close(target)
 
     def sit(self, duration: float = 2.0) -> bool:
         self._require_connection()
-        self._pd_interpolate(np.array(_SIT_JOINTS, dtype=np.float64), duration)
-        return True
+        target = np.array(_SIT_JOINTS, dtype=np.float64)
+        self._pd_interpolate(target, duration)
+        if self._is_stance_close(target, z_min=0.05, z_max=0.25):
+            return True
+        logger.warning(
+            "MuJoCoGo2WithArm.sit: PD posture did not converge; applying hard posture reset"
+        )
+        self._force_leg_posture(target)
+        return self._is_stance_close(target, z_min=0.05, z_max=0.25)
 
     def lie_down(self, duration: float = 2.0) -> bool:
         self._require_connection()
-        self._pd_interpolate(np.array(_LIE_DOWN_JOINTS, dtype=np.float64), duration)
-        return True
+        target = np.array(_LIE_DOWN_JOINTS, dtype=np.float64)
+        self._pd_interpolate(target, duration)
+        if self._is_stance_close(target, z_min=0.0, z_max=0.15):
+            return True
+        logger.warning(
+            "MuJoCoGo2WithArm.lie_down: PD posture did not converge; applying hard posture reset"
+        )
+        self._force_leg_posture(target)
+        return self._is_stance_close(target, z_min=0.0, z_max=0.15)
 
     def walk(self, vx: float = 0.0, vy: float = 0.0, vyaw: float = 0.0, duration: float = 2.0) -> bool:
         self._require_connection()
@@ -807,7 +1179,7 @@ class MuJoCoGo2WithArm:
         data = self._mj.data
         dt = model.opt.timestep
         total_steps = max(1, int(duration / dt))
-        q_start = np.array(data.qpos[7:19], dtype=np.float64)
+        q_start = self._get_go2_leg_qpos()
         q_target = np.asarray(target_joints, dtype=np.float64)
         hold_steps = max(0, int(0.5 / dt))
 
@@ -819,8 +1191,8 @@ class MuJoCoGo2WithArm:
             else:
                 q_des = q_target
 
-            q_cur = np.array(data.qpos[7:19], dtype=np.float64)
-            dq_cur = np.array(data.qvel[6:18], dtype=np.float64)
+            q_cur = self._get_go2_leg_qpos()
+            dq_cur = self._get_go2_leg_qvel()
             tau = _KP * (q_des - q_cur) - _KD * dq_cur
             tau = np.clip(tau, -_TAU_LIMITS, _TAU_LIMITS)
             self._mj.set_joint_torque(tau)
@@ -832,16 +1204,51 @@ class MuJoCoGo2WithArm:
         if was_running:
             self._resume_physics()
 
+    def _is_stance_close(
+        self,
+        target_joints: np.ndarray,
+        joint_tol: float = 0.25,
+        z_min: float = 0.2,
+        z_max: float = 0.45,
+    ) -> bool:
+        """Check whether Go2 leg joints and base height are near the requested posture."""
+        with self._sim_lock:
+            actual = self._get_go2_leg_qpos()
+            base_z = float(self._data.qpos[2])
+        max_err = float(np.max(np.abs(actual - target_joints)))
+        return bool(max_err <= joint_tol and z_min <= base_z <= z_max)
+
+    def _force_leg_posture(self, target_joints: np.ndarray) -> None:
+        """Hard-reset Go2 leg joints to the target posture and zero leg velocities."""
+        mj = _get_mujoco()
+        with self._sim_lock:
+            for adr, pos in zip(self._go2_leg_qpos_adrs, np.asarray(target_joints, dtype=np.float64)):
+                self._data.qpos[adr] = float(pos)
+            for adr in self._go2_leg_qvel_adrs:
+                self._data.qvel[adr] = 0.0
+            self._data.qpos[2] = max(float(self._data.qpos[2]), _GO2_START[2])
+            mj.mj_forward(self._model, self._data)
+
+    def _get_go2_leg_qpos(self) -> np.ndarray:
+        """Return Go2 leg joint positions in canonical FL/FR/RL/RR order."""
+        return np.array([self._data.qpos[adr] for adr in self._go2_leg_qpos_adrs], dtype=np.float64)
+
+    def _get_go2_leg_qvel(self) -> np.ndarray:
+        """Return Go2 leg joint velocities in canonical FL/FR/RL/RR order."""
+        return np.array([self._data.qvel[adr] for adr in self._go2_leg_qvel_adrs], dtype=np.float64)
+
     # ------------------------------------------------------------------
     # Sensor helpers
     # ------------------------------------------------------------------
 
     def _update_odometry(self) -> None:
         from vector_os_nano.core.types import Odometry
-        q = self._mj.data.qpos
-        v = self._mj.data.qvel
+        with self._sim_lock:
+            q = self._data.qpos.copy()
+            v = self._data.qvel.copy()
+            timestamp = float(self._data.time)
         self._last_odom = Odometry(
-            timestamp=float(self._mj.data.time),
+            timestamp=timestamp,
             x=float(q[0]), y=float(q[1]), z=float(q[2]),
             qx=float(q[4]), qy=float(q[5]), qz=float(q[6]), qw=float(q[3]),
             vx=float(v[0]), vy=float(v[1]), vz=float(v[2]), vyaw=float(v[5]),
@@ -852,8 +1259,9 @@ class MuJoCoGo2WithArm:
         from vector_os_nano.core.types import LaserScan
         mj = _get_mujoco()
 
-        pos = self._mj.data.qpos[0:3].copy().astype(np.float64)
-        heading = self.get_heading()
+        with self._sim_lock:
+            pos = self._data.qpos[0:3].copy().astype(np.float64)
+            heading = self.get_heading()
         cos_h = math.cos(heading)
         sin_h = math.sin(heading)
 
@@ -872,14 +1280,15 @@ class MuJoCoGo2WithArm:
             azimuth = heading + math.radians(i * azimuth_step - 180)
             direction = np.array([math.cos(azimuth), math.sin(azimuth), 0.0], dtype=np.float64)
             geom_id = np.zeros(1, dtype=np.int32)
-            dist = mj.mj_ray(
-                self._mj.model, self._mj.data,
-                pos_lidar, direction, None, 1, robot_body_id, geom_id,
-            )
+            with self._sim_lock:
+                dist = mj.mj_ray(
+                    self._model, self._data,
+                    pos_lidar, direction, None, 1, robot_body_id, geom_id,
+                )
             ranges.append(float(dist) if dist > 0 else float("inf"))
 
         self._last_scan = LaserScan(
-            timestamp=float(self._mj.data.time),
+            timestamp=float(self._data.time),
             angle_min=-math.pi, angle_max=math.pi,
             angle_increment=math.radians(azimuth_step),
             range_min=0.1, range_max=12.0,

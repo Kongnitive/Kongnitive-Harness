@@ -97,7 +97,7 @@ _GAIT_FREQ: float = 2.0          # steps per second (Hz)
 _THIGH_AMP: float = 0.25         # thigh swing amplitude (rad)
 _CALF_AMP: float = 0.25          # calf swing amplitude (rad)
 _HIP_AMP: float = 0.10           # hip abduction amplitude for lateral motion (rad)
-_CALF_PHASE: float = 0.0          # calf in-phase: foot down during forward sweep (propulsion)
+_CALF_PHASE: float = math.pi      # calf anti-phase to thigh: flex during swing, extend on stance
 
 # Trotting: diagonal legs in phase, adjacent legs in anti-phase
 # FL+RR together, FR+RL together
@@ -277,9 +277,8 @@ def _compute_gait_targets(
         if abs(vy) > 0.01:
             q_target[base + 0] += _HIP_AMP * (vy / _VY_MAX) * math.sin(phase)
 
-        # Per-leg calf phase: controls which direction the foot pushes
-        # Positive amp → calf_phase=0 → foot down during forward sweep → forward push
-        # Negative amp → calf_phase=pi → foot down during backward sweep → backward push
+        # Per-leg calf phase: keep knee motion anti-phase to thigh swing.
+        # Sign still flips contact timing for forward vs backward propulsion.
         if total_amp >= 0:
             leg_calf_phase = _CALF_PHASE
             amp = total_amp

@@ -363,9 +363,24 @@ async def ros_list_capabilities() -> dict:
     agent = get_agent()
     topics = [
         {
+            "name": "/go2/position",
+            "type": "std_msgs/String",
+            "description": "Go2 position updates published by patrol-style nodes.",
+        },
+        {
+            "name": "/arm/task_request",
+            "type": "std_msgs/String",
+            "description": "Task requests for arm-worker nodes (JSON payload in arm base frame).",
+        },
+        {
+            "name": "/arm/task_result",
+            "type": "std_msgs/String",
+            "description": "Task execution results published by arm-worker nodes.",
+        },
+        {
             "name": "/world_model/state",
             "type": "std_msgs/String",
-            "description": "World state snapshots published by the world model node.",
+            "description": "World state snapshots published by world-model style nodes.",
         },
         {
             "name": "/zone_events",
@@ -740,8 +755,8 @@ def main():
         try:
             from kongnitive_ros2_edgemcp.core.vector_bridge import get_agent  # noqa: PLC0415
             get_agent()
-            logger.info("vector-os-nano MuJoCo agent ready")
-            log_buffer.add("INFO", "vector-os-nano MuJoCo agent ready", "system")
+            logger.info("vector-os-nano merged Go2+Arm MuJoCo agent ready")
+            log_buffer.add("INFO", "vector-os-nano merged Go2+Arm MuJoCo agent ready", "system")
         except ImportError:
             logger.warning("vector-os-nano not installed — sim tools unavailable")
 

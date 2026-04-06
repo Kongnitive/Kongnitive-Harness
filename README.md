@@ -65,7 +65,7 @@ Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代�
 - 臂固定在 Go2 背部（`pos="0.1 0 0.08"`）
 - 单一 MuJoCo 物理实例，1kHz 物理线程同时驱动步态和关节
 - 物体放在 20m×14m 室内场景的厨房岛台上
-- Go2 技能（walk/navigate/patrol）和臂技能（pick/place/detect）共存于同一个 Agent
+- Go2 技能（walk/turn/patrol）和臂技能（pick/place/detect）共存于同一个 Agent
 - 异构节点通过 ROS2 topic 协调：巡逻节点只调移动技能，操作节点只调臂技能
 
 ## AI 自主迭代闭环
@@ -139,7 +139,7 @@ MUJOCO_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server
 
 启动成功输出：
 ```
-INFO - vector-os-nano MuJoCo agent ready
+INFO - vector-os-nano merged Go2+Arm MuJoCo agent ready
 INFO - Starting Kongnitive ROS2 EdgeMCP server...
 ```
 
@@ -253,7 +253,7 @@ def create_node():
 | 技能 | 主要参数 | 说明 |
 |------|---------|------|
 | `pick` | `object_label, mode` | 检测并抓取物体。`mode='hold'` 保持夹持（后接 place 时必须用） |
-| `place` | `x, y, z` | 放置到世界坐标 |
+| `place` | `x, y, z` | 放置到 arm base frame 坐标 |
 | `detect` | `query` | 检测匹配的物体 |
 | `scan` | — | 移动臂到观察位姿 |
 | `home` | — | 臂回到初始位置 |
@@ -266,7 +266,7 @@ def create_node():
 |------|---------|------|
 | `walk` | `direction, distance` | 向指定方向行走 |
 | `turn` | `angle` | 原地转向（角度） |
-| `navigate` | `x, y` | 导航到世界坐标 |
+| `navigate` | `room` | 导航到指定房间 |
 | `stand` | — | 站立 |
 | `sit` | — | 坐下 |
 | `lie_down` | — | 趴下 |
@@ -279,8 +279,8 @@ def create_node():
 | 文件 | 说明 |
 |------|------|
 | `examples/vector_sim_demo_node.py` | 完整臂操作示例（推荐起点） |
-| `examples/go2_patrol_node.py` | Go2 巡逻节点，发布位置到 `/go2/position` |
-| `examples/arm_worker_node.py` | 臂操作节点，订阅 `/arm/task_request` 执行 pick/place |
+| `examples/go2_patrol_node.py` | Go2 巡逻节点，使用 `turn` + `walk` 巡逻并发布位置到 `/go2/position` |
+| `examples/arm_worker_node.py` | 臂操作节点，订阅 `/arm/task_request` 执行 pick/place；`place_at` 必填且使用 arm base frame |
 | `examples/observer_node.py` | 观察节点，订阅 `/world_model/state`，发布 `/zone_events` |
 
 ## 热推机制
@@ -311,9 +311,6 @@ kongnitive-ros2-edgemcp/
 │   │   ├── system_tools.py        # 系统监控
 │   │   ├── node_tools.py          # 节点管理
 │   │   └── episode_tools.py       # Episode + patch 工具
-│   └── config/
-│       ├── server_config.yaml
-│       └── system_prompt.txt
 ├── examples/
 │   ├── vector_sim_demo_node.py    # MuJoCo 臂操作示例（推荐起点）
 │   ├── go2_patrol_node.py         # Go2 巡逻节点示例
@@ -352,7 +349,7 @@ kongnitive-ros2-edgemcp/
 
 **MuJoCo Agent 未就绪**
 - 确认已安装 `vector-os-nano[sim]`：`pip install -e /path/to/vector-os-nano[sim]`
-- 服务启动日志应包含 `vector-os-nano MuJoCo agent ready`
+- 服务启动日志应包含 `vector-os-nano merged Go2+Arm MuJoCo agent ready`
 
 **ros_get_node_log 返回空**
 - 节点脚本中必须调用 `node_log()` 上报结果

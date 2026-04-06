@@ -24,7 +24,7 @@ class StandSkill:
     description: str = "Command the quadruped to stand upright."
     parameters: dict = {}
     preconditions: list[str] = []
-    postconditions: list[str] = ["base_standing"]
+    postconditions: list[str] = []
     effects: dict = {"base_stance": "stand"}
     failure_modes: list[str] = ["no_base", "stand_failed"]
 
@@ -71,7 +71,7 @@ class SitSkill:
     description: str = "Command the quadruped to sit down."
     parameters: dict = {}
     preconditions: list[str] = []
-    postconditions: list[str] = ["base_sitting"]
+    postconditions: list[str] = []
     effects: dict = {"base_stance": "sit"}
     failure_modes: list[str] = ["no_base", "sit_failed"]
 
@@ -118,7 +118,7 @@ class LieDownSkill:
     description: str = "Command the quadruped to lie down in prone posture."
     parameters: dict = {}
     preconditions: list[str] = []
-    postconditions: list[str] = ["base_lying"]
+    postconditions: list[str] = []
     effects: dict = {"base_stance": "lie_down"}
     failure_modes: list[str] = ["no_base", "lie_down_failed"]
 

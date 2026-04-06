@@ -67,7 +67,7 @@ MUJOCO_HEADLESS=0 python3 -m kongnitive_ros2_edgemcp.server
 
 启动成功输出：
 ```
-INFO - vector-os-nano MuJoCo agent ready
+INFO - vector-os-nano merged Go2+Arm MuJoCo agent ready
 INFO - Starting Kongnitive ROS2 EdgeMCP server...
 ```
 
@@ -303,7 +303,7 @@ def create_node():
 | 技能 | 主要参数 | 说明 |
 |------|---------|------|
 | `pick` | `object_label, mode` | 检测并抓取物体。`mode='hold'` 保持夹持 |
-| `place` | `x, y, z` | 放置到世界坐标 |
+| `place` | `x, y, z` | 放置到 arm base frame 坐标 |
 | `detect` | `query` | 检测匹配的物体 |
 | `scan` | — | 移动臂到观察位姿 |
 | `home` | — | 臂回到初始位置 |
@@ -316,7 +316,7 @@ def create_node():
 |------|---------|------|
 | `walk` | `direction, distance` | 向指定方向行走 |
 | `turn` | `angle` | 原地转向 |
-| `navigate` | `x, y` | 导航到世界坐标 |
+| `navigate` | `room` | 导航到指定房间 |
 | `stand` | — | 站立 |
 | `sit` | — | 坐下 |
 | `stop` | — | 紧急停止 |
@@ -356,7 +356,7 @@ EDGEMCP_AGENT_MODE=arm_only python3 -m kongnitive_ros2_edgemcp.server
 ros_push_node("go2_patrol", open("examples/go2_patrol_node.py").read())
 ```
 
-Go2 会依次导航到厨房岛台附近的 3 个路径点，并在 `/go2/position` 发布位置。
+Go2 会依次执行 `turn` + `walk` 巡逻到厨房岛台附近的 3 个路径点，并在 `/go2/position` 发布位置。
 
 ### 2) 推送臂操作节点
 
@@ -364,7 +364,7 @@ Go2 会依次导航到厨房岛台附近的 3 个路径点，并在 `/go2/positi
 ros_push_node("arm_worker", open("examples/arm_worker_node.py").read())
 ```
 
-臂节点订阅 `/arm/task_request`，等待任务指令。
+臂节点订阅 `/arm/task_request`，等待任务指令。`place_at` 为必填字段，坐标语义是 arm base frame。
 
 ### 3) 发送操作指令
 
@@ -386,7 +386,7 @@ ros_get_node_log("arm_worker")   # 操作日志
 
 协调 topic 一览：
 - `/go2/position` — Go2 位置（JSON）
-- `/arm/task_request` — 操作指令
+- `/arm/task_request` — 操作指令（JSON，必须包含 `place_at`，且使用 arm base frame）
 - `/arm/task_result` — 操作结果
 
 ## 多节点协作 Demo（观察节点）
