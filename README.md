@@ -1,16 +1,42 @@
 # Kongnitive ROS2 EdgeMCP
 
-**AI 自主迭代机器人控制系统 — 热推 ROS2 节点 + MuJoCo 真实仿真反馈**
+**Simulation-in-the-Loop 具身智能闭环开发系统 — Harness Engineering for Robot AI**
 
-给 AI 一个目标和边界条件，AI 自主生成 ROS2 控制节点、热推部署、读取 MuJoCo 物理仿真反馈、分析失败原因、迭代改进——全程无人参与，无需 build，无需重启。
+## 背景与问题
 
-## 核心理念
+以 Codex、Claude Code 为代表的 AI 编程工具，已经在软件开发领域初步实现了"写代码→运行→报错→修复"的自我闭环。给定一个明确的目标，AI 可以自主迭代，直到代码通过测试。这套模式在纯软件场景下运转良好，因为执行环境是确定的，失败信息是结构化的，反馈可以直接驱动下一次修改。
 
-> **代码即行动，热推即部署，反馈即学习。**
+但在机器人和具身智能领域，这套闭环尚未建立。当前的机器人仿真和调试流程基本还是传统路径：人工改代码、手动部署 ROS2 节点、在仿真器里跑测试、肉眼看行为是否正常、再判断问题出在哪。整个流程割裂、慢、依赖人的经验判断。
+
+根本原因在于，机器人系统的"执行环境"比普通软件复杂得多——时序问题、状态机切换、感知与动作衔接、物理约束，这些问题在静态代码里看不出来，只有在运行中才会暴露。而现有工具链并没有把仿真执行的结果结构化地接回开发流程，每次失败的证据都停留在日志文件里，需要人去消化再决定怎么改。
+
+## Harness Engineering：驾驭 AI Agent 的工程
+
+在讨论"让 AI 做机器人开发"之前，有一个更基础的问题需要先回答：如何设计一套系统，让 AI agent 在给定目标和边界约束下，真正自主、高效地完成任务，而不是频繁失控、偏离方向或等待人工干预？
+
+这个问题本身就是一门工程，我们把它称为 **Harness Engineering**——驾驭工程。
+
+它不是在问"AI 能不能做"，而是在问"怎么搭架子，让 AI 做得稳"。核心设计挑战有三个：
+
+**目标要足够可操作。** 自然语言目标对人清晰，对 AI 执行来说太模糊。Harness Engineering 的第一步是把目标转化为结构化的任务描述——包含任务类型、成功标准、约束条件和评估 profile。这是 AI agent 行动的锚点，也是判断每次执行是否有效的依据。
+
+**边界要通过环境而非指令来约束。** 单靠 prompt 告诉 AI "不要做 X"是脆弱的。更可靠的方式是在运行时环境上划定边界：哪些 behavior 可以修改、哪些节点在保护范围内、哪些操作需要人工确认。Kongnitive 的权限分层和 behavior backend 设计，本质上都是这类边界的工程实现。
+
+**反馈要结构化到可以直接驱动行动。** AI agent 的自主能力上限，取决于它能读到多高质量的反馈。如果失败信息只是一堆原始日志，agent 需要大量推理才能定位问题，效率和准确率都会下降。Kongnitive 把 failure trace、metrics 和 node log 统一结构化，目的是让 agent 拿到的不是"发生了什么"，而是"哪里出了什么问题"——从而让 patch 有据可依，而不是靠猜。
+
+## 项目目标
+
+Kongnitive Harness 的目标是把 simulation 从测试工具变成开发主循环的一部分，在 Harness Engineering 的设计原则下，构建一套 simulation-in-the-loop 的具身智能闭环开发系统。
+
+人负责定义目标、约束和优化方向；AI 依托 Kongnitive Harness 提供的运行时能力，在仿真环境中持续修改行为代码，驱动仿真执行，读取结构化反馈，再根据证据继续迭代——最终形成一个可验证、可复用、经验可沉淀的闭环。
+
+> **仿真说明**：当前 MVP 阶段借助 [vector-os-nano](https://github.com/vector-robotics/vector-os-nano) 提供的 MuJoCo 仿真环境进行验证。vector-os-nano 仅作为仿真后端使用，Kongnitive 的核心架构（热推引擎、MCP 工具层、AI 迭代闭环）与具体仿真实现无耦合。
+
+## 系统概览
 
 传统 ROS2 开发：修改代码 → 编译 → 重启 → 验证（5-20 分钟/轮）
 
-Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代（< 5 秒/轮）
+Kongnitive：AI 生成代码 → 热推 → 观察仿真结果 → 再迭代（< 5 秒/轮）
 
 在当前实现里，ROS2 负责节点间通信骨干，EdgeMCP 负责热推、生命周期和运行时能力视图。
 
@@ -45,17 +71,15 @@ Kongnitive：AI 生成代码 → 热推 → 观察 MuJoCo 结果 → 再迭代�
 │              /go2/position  /arm/task_request  /zone_events  │
 │              /world_model/state      /arm/task_result         │
 └──────────────────────────────────────┼───────────────────────┘
-                                       │ Python import (同进程)
+                                       │ agent.execute_skill()
                                        ▼
-┌─────────────────────────────────────────────────────────────┐
-│              vector-os-nano (纯 Python 库)                   │
-│                                                              │
-│  VectorBridge.get_agent()  ← 单例，进程级共享               │
-│  Agent.execute_skill(name, params)                           │
-│  MuJoCoGo2WithArm (Go2 四足 + SO-101 臂，单一物理实例)      │
-│  MuJoCoGripper + MuJoCoPerception                            │
-│  MuJoCo Physics Engine → 真实物理结果 (success/failure)      │
-└─────────────────────────────────────────────────────────────┘
+                          ┌────────────────────────┐
+                          │   物理仿真后端（MVP）    │
+                          │  MuJoCo · Go2 + SO-101  │
+                          │  success / failure 反馈  │
+                          └────────────────────────┘
+                    (当前使用 vector-os-nano 仿真库验证；
+                     生产环境可替换为真实硬件驱动)
 ```
 
 ### Go2 + 臂合并仿真
