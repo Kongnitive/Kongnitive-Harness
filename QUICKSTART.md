@@ -84,6 +84,34 @@ cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
 pip install -e .
 ```
 
+### Isaac Sim 后端（原生 Ubuntu）
+
+原生 Ubuntu 22.04 上 CUDA 和 Vulkan 均可正常使用，Isaac Sim 支持无头和可视化两种模式。
+
+**前置条件：**
+- Ubuntu 22.04（原生，非 WSL2）
+- NVIDIA 驱动 525+（`nvidia-smi` 可正常输出）
+- CUDA 12.x（`nvcc --version` 可正常输出）
+- ROS2 Humble
+
+```bash
+source /opt/ros/humble/setup.bash
+
+# 安装 Isaac Sim（约 15GB）
+# 原生 Ubuntu 上 Isaac Sim 与 ROS2 可共存，无需独立 venv
+pip install isaacsim==4.5.0 \
+    --extra-index-url https://pypi.nvidia.com \
+    isaacsim-rl isaacsim-replicator isaacsim-extscache-physics \
+    isaacsim-extscache-kit isaacsim-extscache-kit-sdk
+
+# 验证
+python -c "from isaacsim import SimulationApp; print('OK')"
+
+# 安装 kongnitive
+cd /path/to/kongnitive-ros2-edgemcp
+pip install -e .
+```
+
 ## 3) 启动服务
 
 ### MuJoCo 后端
@@ -104,23 +132,23 @@ MUJOCO_HEADLESS=0 python3 -m kongnitive_ros2_edgemcp.server
 source ~/isaac-venv/bin/activate
 source /opt/ros/humble/setup.bash
 
-# 无头模式（推荐，物理仿真走 CUDA，不依赖 Vulkan）
+# 无头模式（WSL2 唯一可用模式，PhysX 物理仿真走 CUDA 正常运行）
 EDGEMCP_SIM_BACKEND=isaac python3 -m kongnitive_ros2_edgemcp.server
 ```
 
-> **WSL2 可视化注意**：Isaac Sim 的可视化渲染依赖 Vulkan GPU ICD。WSL2 默认只有 Mesa（Intel/AMD）的 ICD，没有 NVIDIA 的，会报 `No device could be created`。
-> 无头模式（`ISAAC_HEADLESS=1`，默认）不受影响，PhysX 物理仿真走 CUDA 正常运行。
-> 如需可视化，先安装 NVIDIA Vulkan ICD：
->
-> ```bash
-> # 查询当前驱动主版本号
-> DRIVER_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)
-> sudo apt-get install -y libnvidia-gl-${DRIVER_MAJOR}
-> # 验证 NVIDIA ICD 已注册
-> ls /usr/share/vulkan/icd.d/nvidia*
-> # 再启动带可视化
-> EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python3 -m kongnitive_ros2_edgemcp.server
-> ```
+> **WSL2 不支持 Isaac Sim**：WSL2 内核不暴露 CUDA runtime（`nvidia-smi` 走的是 Windows 侧代理，不等于 CUDA 可用），Isaac Sim 启动时会因 `no CUDA-capable device` 直接 segfault。Isaac Sim 需要原生 Ubuntu 或 Windows 原生环境，WSL2 不可用。
+
+### Isaac Sim 后端（原生 Ubuntu）
+
+```bash
+source /opt/ros/humble/setup.bash
+
+# 无头模式
+EDGEMCP_SIM_BACKEND=isaac python3 -m kongnitive_ros2_edgemcp.server
+
+# 带可视化（原生 Ubuntu 支持，WSL2 不支持）
+EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python3 -m kongnitive_ros2_edgemcp.server
+```
 
 启动成功输出：
 ```
@@ -251,6 +279,53 @@ wsl -d Ubuntu-22.04 cat /tmp/kongnitive-mcp.stderr.log
 ```
 
 如果日志里出现 `stream did not contain valid UTF-8`，通常说明服务往 stderr 打了非 UTF-8 内容。上面的 `LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1` 一般能解决；若仍存在，就需要继续排查是哪个依赖在输出异常编码。
+
+### 原生 Ubuntu — Isaac Sim 后端配置
+
+**Claude Code 直接运行在 Ubuntu 机器上：**
+
+```json
+{
+  "mcpServers": {
+    "kongnitive": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
+      ]
+    }
+  }
+}
+```
+
+**Claude Code 在 Windows 上，通过 SSH 连接 Ubuntu 机器：**
+
+```json
+{
+  "mcpServers": {
+    "kongnitive": {
+      "command": "ssh",
+      "args": [
+        "user@ubuntu-machine",
+        "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
+      ]
+    }
+  }
+}
+```
+
+**Codex（原生 Ubuntu）：**
+
+```toml
+[mcp_servers.kongnitive]
+command = "bash"
+args = [
+  "-c",
+  "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python3 -m kongnitive_ros2_edgemcp.server"
+]
+startup_timeout_sec = 60
+tool_timeout_sec = 120
+```
 
 ## 5) 第一个 AI 迭代 Demo
 

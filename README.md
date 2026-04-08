@@ -184,6 +184,34 @@ cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
 pip install -e .
 ```
 
+### 安装（Isaac Sim 后端 — 原生 Ubuntu）
+
+原生 Ubuntu 22.04 上 CUDA 和 Vulkan 均可正常使用，Isaac Sim 支持无头和可视化两种模式。
+
+**前置条件：**
+- Ubuntu 22.04（原生，非 WSL2）
+- NVIDIA 驱动 525+（`nvidia-smi` 可正常输出）
+- CUDA 12.x（`nvcc --version` 可正常输出）
+- ROS2 Humble
+
+```bash
+source /opt/ros/humble/setup.bash
+
+# 安装 Isaac Sim（约 15GB）
+# 原生 Ubuntu 上 Isaac Sim 与 ROS2 可共存，无需独立 venv
+pip install isaacsim==4.5.0 \
+    --extra-index-url https://pypi.nvidia.com \
+    isaacsim-rl isaacsim-replicator isaacsim-extscache-physics \
+    isaacsim-extscache-kit isaacsim-extscache-kit-sdk
+
+# 验证安装
+python -c "from isaacsim import SimulationApp; print('OK')"
+
+# 安装 kongnitive
+cd /path/to/kongnitive-ros2-edgemcp
+pip install -e .
+```
+
 ### 启动服务
 
 **MuJoCo 后端（默认）：**
@@ -204,17 +232,25 @@ MUJOCO_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server
 source ~/isaac-venv/bin/activate
 source /opt/ros/humble/setup.bash
 
-# 无头模式（推荐，物理仿真走 CUDA，不依赖 Vulkan）
+# 无头模式（WSL2 唯一可用模式）
 EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server
 ```
 
-> **WSL2 可视化注意**：Isaac Sim 渲染依赖 Vulkan GPU ICD，WSL2 默认没有 NVIDIA 的 ICD，会报 `No device could be created`。无头模式不受影响。如需可视化，先安装：
-> ```bash
-> DRIVER_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)
-> sudo apt-get install -y libnvidia-gl-${DRIVER_MAJOR}
-> # 然后
-> EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server
-> ```
+> **WSL2 不支持 Isaac Sim**：WSL2 内核不暴露 CUDA runtime（`nvidia-smi` 走的是 Windows 侧代理，不等于 CUDA 可用），Isaac Sim 启动时会因 `no CUDA-capable device` 直接 segfault。Isaac Sim 需要原生 Ubuntu 或 Windows 原生环境，WSL2 不可用。
+
+**Isaac Sim 后端（原生 Ubuntu，无头）：**
+
+```bash
+source /opt/ros/humble/setup.bash
+EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server
+```
+
+**Isaac Sim 后端（原生 Ubuntu，带可视化）：**
+
+```bash
+source /opt/ros/humble/setup.bash
+EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server
+```
 
 启动成功输出：
 ```
@@ -264,6 +300,40 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 ```
 
 重启 Claude Code 后，MCP 工具会自动加载。
+
+### 配置 Claude Code MCP（原生 Ubuntu）
+
+如果 Claude Code 直接运行在 Ubuntu 机器上：
+
+```json
+{
+  "mcpServers": {
+    "kongnitive": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
+      ]
+    }
+  }
+}
+```
+
+如果 Claude Code 在 Windows 上，通过 SSH 连接 Ubuntu 机器：
+
+```json
+{
+  "mcpServers": {
+    "kongnitive": {
+      "command": "ssh",
+      "args": [
+        "user@ubuntu-machine",
+        "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
+      ]
+    }
+  }
+}
+```
 
 ## MCP 工具列表
 
