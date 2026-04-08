@@ -24,6 +24,8 @@ _agent: Optional[Any] = None
 _lock = threading.Lock()
 _skill_lock = threading.Lock()
 
+_SIM_BACKEND = os.environ.get("EDGEMCP_SIM_BACKEND", "mujoco")
+
 
 class _ThreadSafeAgentProxy:
     """Wraps an Agent so that execute_skill calls are serialized."""
@@ -40,29 +42,27 @@ class _ThreadSafeAgentProxy:
 
 
 def get_agent():
-    """Get or lazily create the shared MuJoCo sim Agent.
+    """Get or lazily create the shared sim Agent.
 
-    Thread-safe double-checked locking. The first call initialises
-    MuJoCo (headless) which takes ~2-5 s; subsequent calls return
-    immediately.
-
-    By default creates the merged Go2+Arm agent. Set environment
-    variable EDGEMCP_AGENT_MODE=arm_only to use the arm-only agent.
-
-    Returns a thread-safe proxy that serializes execute_skill calls
-    so concurrent ROS2 nodes don't corrupt physics state.
+    Thread-safe double-checked locking. Backend is selected via
+    EDGEMCP_SIM_BACKEND env var ("mujoco" default, or "isaac").
 
     Returns:
-        _ThreadSafeAgentProxy wrapping the real Agent.
+        Thread-safe agent proxy with execute_skill() interface.
 
     Raises:
-        ImportError: if vector-os-nano is not installed.
+        ImportError: if the selected backend is not installed.
     """
     global _agent
     if _agent is not None:
         return _agent
     with _lock:
         if _agent is not None:
+            return _agent
+
+        if _SIM_BACKEND == "isaac":
+            from kongnitive_ros2_edgemcp.core.isaac_bridge import get_agent as _isaac_get  # noqa: PLC0415
+            _agent = _isaac_get()
             return _agent
 
         headless = os.environ.get("MUJOCO_HEADLESS", "1") == "1"

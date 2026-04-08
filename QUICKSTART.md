@@ -2,10 +2,17 @@
 
 ## 目标
 
-给 AI 一个目标，AI 自主生成 ROS2 节点代码、热推执行、读取 MuJoCo 仿真反馈、迭代改进。
-默认模式下，MuJoCo 仿真包含 Go2 四足 + SO-101 机械臂的合并场景，Go2 负责巡逻移动，臂负责操作抓取，通过 ROS2 topic 协调。
+给 AI 一个目标，AI 自主生成 ROS2 节点代码、热推执行、读取仿真反馈、迭代改进。
+默认模式下，仿真包含 Go2 四足 + SO-101 机械臂的合并场景，Go2 负责巡逻移动，臂负责操作抓取，通过 ROS2 topic 协调。
 ROS2 负责节点间通信，EdgeMCP 负责热推、生命周期与运行时能力视图。
 **无需 Gazebo，无需 build，无需重启。**
+
+支持两个仿真后端，通过 `EDGEMCP_SIM_BACKEND` 切换：
+
+| 后端 | 变量值 | 特点 |
+|------|--------|------|
+| MuJoCo（默认） | `mujoco` | 启动快（2-5s），依赖轻，适合快速迭代 |
+| Isaac Sim | `isaac` | NVIDIA PhysX，RTX 渲染，适合高保真仿真 |
 
 ## 前置条件
 
@@ -13,6 +20,7 @@ ROS2 负责节点间通信，EdgeMCP 负责热推、生命周期与运行时能�
 - **WSL2** with Ubuntu 22.04
 - **ROS2 Humble** 已安装在 WSL2 内
 - Python 3.10+
+- Isaac Sim 后端额外需要：NVIDIA GPU（RTX 20xx+），CUDA 12.x
 
 ## 1) WSL2 环境准备
 
@@ -20,7 +28,7 @@ ROS2 负责节点间通信，EdgeMCP 负责热推、生命周期与运行时能�
 # 进入 WSL2
 wsl -d Ubuntu-22.04
 
-# 安装 OpenGL 支持（MuJoCo 可视化需要）
+# 安装 OpenGL 支持
 sudo apt update
 sudo apt install -y mesa-utils libgl1-mesa-glx
 
@@ -32,8 +40,9 @@ ros2 topic list
 
 ## 2) 安装
 
+### MuJoCo 后端
+
 ```bash
-# 在 WSL2 内执行
 source /opt/ros/humble/setup.bash
 
 # 安装 vector-os-nano（MuJoCo 仿真）
@@ -43,7 +52,7 @@ pip3 install -e /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp/vector-os-nano[s
 cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
 pip3 install -e .
 
-# 验证 MuJoCo 可用（默认 Go2+臂合并模式）
+# 验证
 python3 -c "
 from vector_os_nano.mcp.server import create_go2_arm_sim_agent
 a = create_go2_arm_sim_agent(headless=True)
@@ -52,33 +61,85 @@ a.disconnect()
 "
 ```
 
-## 3) 启动服务
+### Isaac Sim 后端
+
+Isaac Sim 4.x 支持 pip 直接安装，无需 Omniverse Launcher。建议用独立 venv 避免与 ROS2 依赖冲突。
 
 ```bash
-# 在 WSL2 内执行
+# 建立独立 venv
+python3 -m venv ~/isaac-venv
+source ~/isaac-venv/bin/activate
+
+# 安装 Isaac Sim（约 15GB）
+pip install isaacsim==4.5.0 \
+    --extra-index-url https://pypi.nvidia.com \
+    isaacsim-rl isaacsim-replicator isaacsim-extscache-physics \
+    isaacsim-extscache-kit isaacsim-extscache-kit-sdk
+
+# 验证
+python -c "from isaacsim import SimulationApp; print('OK')"
+
+# 安装 kongnitive（在同一 venv 内）
+cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
+pip install -e .
+```
+
+## 3) 启动服务
+
+### MuJoCo 后端
+
+```bash
 source /opt/ros/humble/setup.bash
 
-# 方式 1: 无头模式（默认，更快）
+# 无头模式（默认）
 python3 -m kongnitive_ros2_edgemcp.server
 
-# 方式 2: 带可视化（MuJoCo 窗口显示在 Windows 桌面）
+# 带可视化（MuJoCo 窗口显示在 Windows 桌面）
 MUJOCO_HEADLESS=0 python3 -m kongnitive_ros2_edgemcp.server
 ```
 
+### Isaac Sim 后端
+
+```bash
+source ~/isaac-venv/bin/activate
+source /opt/ros/humble/setup.bash
+
+# 无头模式（推荐，物理仿真走 CUDA，不依赖 Vulkan）
+EDGEMCP_SIM_BACKEND=isaac python3 -m kongnitive_ros2_edgemcp.server
+```
+
+> **WSL2 可视化注意**：Isaac Sim 的可视化渲染依赖 Vulkan GPU ICD。WSL2 默认只有 Mesa（Intel/AMD）的 ICD，没有 NVIDIA 的，会报 `No device could be created`。
+> 无头模式（`ISAAC_HEADLESS=1`，默认）不受影响，PhysX 物理仿真走 CUDA 正常运行。
+> 如需可视化，先安装 NVIDIA Vulkan ICD：
+>
+> ```bash
+> # 查询当前驱动主版本号
+> DRIVER_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)
+> sudo apt-get install -y libnvidia-gl-${DRIVER_MAJOR}
+> # 验证 NVIDIA ICD 已注册
+> ls /usr/share/vulkan/icd.d/nvidia*
+> # 再启动带可视化
+> EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python3 -m kongnitive_ros2_edgemcp.server
+> ```
+
 启动成功输出：
 ```
+# MuJoCo
 INFO - vector-os-nano merged Go2+Arm MuJoCo agent ready
+INFO - Starting Kongnitive ROS2 EdgeMCP server...
+
+# Isaac Sim
+INFO - isaac_bridge: Isaac Sim agent ready
 INFO - Starting Kongnitive ROS2 EdgeMCP server...
 ```
 
-如果启用可视化，Windows 桌面会弹出 MuJoCo 仿真窗口。
-
-## 4) 配置 Claude Code / Codex
+## 4) 配置 MCP Server
 
 ### Claude Code
 
 在项目根目录（Windows 侧）创建 `.mcp.json`：
 
+**MuJoCo 后端：**
 ```json
 {
   "mcpServers": {
@@ -94,7 +155,7 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 }
 ```
 
-**带可视化版本**（调试时推荐）：
+**Isaac Sim 后端：**
 ```json
 {
   "mcpServers": {
@@ -103,7 +164,7 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
       "args": [
         "-d", "Ubuntu-22.04",
         "bash", "-c",
-        "source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && MUJOCO_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server"
+        "source ~/isaac-venv/bin/activate && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
       ]
     }
   }
@@ -114,70 +175,47 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 
 ### Codex
 
-当前 Codex 已公开文档和 CLI 可直接确认的 MCP 配置方式，是共享配置：
+在 `~/.codex/config.toml` 中添加：
 
-- `codex mcp add ...`
-- `~/.codex/config.toml` 下的 `[mcp_servers.<name>]`
-
-如果你在 Codex 里执行 `/mcp`，显示 `No MCP servers configured`，通常说明 Codex **没有识别到该配置**。  
-目前不要使用下面这种“项目作用域 MCP”写法，因为当前版本下它不会被 `/mcp` 识别：
-
-```toml
-[projects.'D:\Projects\edgemcp\kongnitive-ros2-edgemcp'.mcp_servers.kongnitive]
-```
-
-建议先使用 Codex 当前可识别的标准写法，在 `~/.codex/config.toml` 中添加：
-
+**MuJoCo 后端：**
 ```toml
 [mcp_servers.kongnitive]
-command = "wsl"
+command = “wsl”
 args = [
-  "-d", "Ubuntu-22.04",
-  "bash", "-c",
-  "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python3 -m kongnitive_ros2_edgemcp.server"
+  “-d”, “Ubuntu-22.04”,
+  “bash”, “-c”,
+  “export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python3 -m kongnitive_ros2_edgemcp.server”
 ]
 startup_timeout_sec = 20
 tool_timeout_sec = 120
 ```
 
-**带可视化版本**：
-
+**Isaac Sim 后端：**
 ```toml
 [mcp_servers.kongnitive]
-command = "wsl"
+command = “wsl”
 args = [
-  "-d", "Ubuntu-22.04",
-  "bash", "-c",
-  "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && MUJOCO_HEADLESS=0 python3 -m kongnitive_ros2_edgemcp.server"
+  “-d”, “Ubuntu-22.04”,
+  “bash”, “-c”,
+  “export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 && source ~/isaac-venv/bin/activate && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python3 -m kongnitive_ros2_edgemcp.server”
 ]
-startup_timeout_sec = 20
+startup_timeout_sec = 60
 tool_timeout_sec = 120
 ```
 
-或者直接用 CLI 添加：
+> Isaac Sim 启动较慢（30-60s），`startup_timeout_sec` 设为 60。
+
+或者直接用 CLI 添加（MuJoCo）：
 
 ```powershell
-codex mcp add kongnitive -- wsl -d Ubuntu-22.04 bash -c "export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python3 -m kongnitive_ros2_edgemcp.server"
+codex mcp add kongnitive -- wsl -d Ubuntu-22.04 bash -c “export LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1 && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python3 -m kongnitive_ros2_edgemcp.server”
 ```
 
-添加后可验证：
+添加后验证：
 
 ```powershell
 codex mcp list
 ```
-
-如果这里能看到 `kongnitive`，Codex 里的 `/mcp` 才会显示它。
-
-### 关于“只在特定目录生效”
-
-当前能确认的官方写法是共享 MCP 配置，没有看到 Codex 官方文档提供“按目录自动启用 MCP server”的配置格式。  
-也就是说，**当前版本更稳妥的结论是：Codex MCP 先按全局共享配置处理，不要依赖目录级 `mcp_servers` 自动生效。**
-
-如果你必须做隔离，现实可行的做法一般是：
-
-- 为不同项目使用不同的 server 名称，按需启用/删除
-- 用不同的 Codex 配置环境或不同系统用户隔离
-- 先保留全局 MCP，再在项目里的 `AGENTS.md` 约束何时使用它
 
 ### Codex 闪退 / 日志排查
 
@@ -291,7 +329,7 @@ def create_node():
 
 - 节点脚本**必须**定义 `create_node()` 并返回 `rclpy.node.Node` 实例
 - 节点脚本**必须**调用 `node_log()` 上报结果，否则 `ros_get_node_log` 返回空
-- `get_agent()` 返回进程级单例，所有节点共享同一个 MuJoCo 仿真实例（默认 Go2+臂合并）
+- `get_agent()` 返回进程级单例，所有节点共享同一个仿真实例（默认 MuJoCo Go2+臂合并；Isaac Sim 后端同理）
 - 节点间协作优先通过 ROS2 topic/service；核心 topic 包括 `/world_model/state`、`/zone_events`、`/go2/position`、`/arm/task_request`、`/arm/task_result`
 - 热推新版本时，旧节点日志自动清空
 - `ros_get_successful_node_examples()` 会先查持久化成功模板，再查当前 session 成功节点，最后回退到内置 examples
@@ -327,10 +365,12 @@ def create_node():
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `EDGEMCP_AGENT_MODE` | `go2_arm` | `go2_arm` = Go2+臂合并；`arm_only` = 仅臂 |
-| `MUJOCO_HEADLESS` | `1` | `1` = 无头；`0` = 可视化窗口 |
+| `EDGEMCP_SIM_BACKEND` | `mujoco` | `mujoco` = MuJoCo 后端；`isaac` = Isaac Sim 后端 |
+| `EDGEMCP_AGENT_MODE` | `go2_arm` | （MuJoCo 专用）`go2_arm` = Go2+臂合并；`arm_only` = 仅臂 |
+| `MUJOCO_HEADLESS` | `1` | （MuJoCo 专用）`1` = 无头；`0` = 可视化窗口 |
+| `ISAAC_HEADLESS` | `1` | （Isaac Sim 专用）`1` = 无头；`0` = 可视化窗口 |
 
-如需仅使用臂模式（不含 Go2 四足）：
+仅臂模式（MuJoCo，不含 Go2 四足）：
 
 ```bash
 EDGEMCP_AGENT_MODE=arm_only python3 -m kongnitive_ros2_edgemcp.server

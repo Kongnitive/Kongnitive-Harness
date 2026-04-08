@@ -80,11 +80,12 @@ Kongnitive：AI 生成代码 → 热推 → 观察仿真结果 → 再迭代（<
                                        │ agent.execute_skill()
                                        ▼
                           ┌────────────────────────┐
-                          │   物理仿真后端（MVP）    │
+                          │   物理仿真后端（可插拔）  │
                           │  MuJoCo · Go2 + SO-101  │
+                          │  Isaac Sim · PhysX       │
                           │  success / failure 反馈  │
                           └────────────────────────┘
-                    (当前使用 vector-os-nano 仿真库验证；
+                    (通过 EDGEMCP_SIM_BACKEND 切换后端；
                      生产环境可替换为真实硬件驱动)
 ```
 
@@ -124,15 +125,21 @@ Kongnitive：AI 生成代码 → 热推 → 观察仿真结果 → 再迭代（<
 
 ## 快速开始
 
+Kongnitive 支持两个仿真后端，通过环境变量 `EDGEMCP_SIM_BACKEND` 切换：
+
+| 后端 | 变量值 | 特点 |
+|------|--------|------|
+| MuJoCo（默认） | `mujoco` | 启动快（2-5s），依赖轻，适合快速迭代 |
+| Isaac Sim | `isaac` | NVIDIA PhysX，RTX 渲染，适合高保真仿真 |
+
 ### 前置条件
 
 - **Windows 11** 或 Windows 10 22H2+（WSLg GUI 支持）
 - **WSL2** with Ubuntu 22.04
 - **ROS2 Humble** 已安装在 WSL2 内
 - Python 3.10+
-- [vector-os-nano](https://github.com/vector-robotics/vector-os-nano)（提供 MuJoCo 仿真）
 
-### 安装
+### 安装（MuJoCo 后端）
 
 ```bash
 # 进入 WSL2
@@ -154,31 +161,77 @@ cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
 pip install -e .
 ```
 
-### 启动服务
+### 安装（Isaac Sim 后端）
+
+需要 NVIDIA GPU（RTX 20xx+）和 CUDA 12.x。Isaac Sim 4.x 支持 pip 直接安装，无需 Omniverse Launcher。
 
 ```bash
-# 在 WSL2 内执行
+# 建议用独立 venv 避免与 ROS2 依赖冲突
+python3 -m venv ~/isaac-venv
+source ~/isaac-venv/bin/activate
+
+# 安装 Isaac Sim（约 15GB，需要时间）
+pip install isaacsim==4.5.0 \
+    --extra-index-url https://pypi.nvidia.com \
+    isaacsim-rl isaacsim-replicator isaacsim-extscache-physics \
+    isaacsim-extscache-kit isaacsim-extscache-kit-sdk
+
+# 验证安装
+python -c "from isaacsim import SimulationApp; print('OK')"
+
+# 安装 kongnitive（在同一 venv 内）
+cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
+pip install -e .
+```
+
+### 启动服务
+
+**MuJoCo 后端（默认）：**
+
+```bash
 source /opt/ros/humble/setup.bash
 
-# 方式 1: 无头模式（默认，更快）
+# 无头模式
 python -m kongnitive_ros2_edgemcp.server
 
-# 方式 2: 带可视化（MuJoCo 窗口显示在 Windows 桌面）
+# 带可视化（MuJoCo 窗口显示在 Windows 桌面）
 MUJOCO_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server
 ```
 
-启动成功输出：
-```
-INFO - vector-os-nano merged Go2+Arm MuJoCo agent ready
-INFO - Starting Kongnitive ROS2 EdgeMCP server...
+**Isaac Sim 后端：**
+
+```bash
+source ~/isaac-venv/bin/activate
+source /opt/ros/humble/setup.bash
+
+# 无头模式（推荐，物理仿真走 CUDA，不依赖 Vulkan）
+EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server
 ```
 
-如果启用可视化，Windows 桌面会弹出 MuJoCo 仿真窗口。
+> **WSL2 可视化注意**：Isaac Sim 渲染依赖 Vulkan GPU ICD，WSL2 默认没有 NVIDIA 的 ICD，会报 `No device could be created`。无头模式不受影响。如需可视化，先安装：
+> ```bash
+> DRIVER_MAJOR=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | cut -d. -f1)
+> sudo apt-get install -y libnvidia-gl-${DRIVER_MAJOR}
+> # 然后
+> EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server
+> ```
+
+启动成功输出：
+```
+# MuJoCo
+INFO - vector-os-nano merged Go2+Arm MuJoCo agent ready
+INFO - Starting Kongnitive ROS2 EdgeMCP server...
+
+# Isaac Sim
+INFO - isaac_bridge: Isaac Sim agent ready
+INFO - Starting Kongnitive ROS2 EdgeMCP server...
+```
 
 ### 配置 Claude Code MCP
 
 在项目根目录（Windows 侧）创建或更新 `.mcp.json`：
 
+**MuJoCo 后端（默认）：**
 ```json
 {
   "mcpServers": {
@@ -194,7 +247,7 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 }
 ```
 
-**带可视化版本**（调试时推荐）：
+**Isaac Sim 后端：**
 ```json
 {
   "mcpServers": {
@@ -203,7 +256,7 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
       "args": [
         "-d", "Ubuntu-22.04",
         "bash", "-c",
-        "source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && MUJOCO_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server"
+        "source ~/isaac-venv/bin/activate && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
       ]
     }
   }
@@ -359,8 +412,10 @@ kongnitive-ros2-edgemcp/
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `EDGEMCP_AGENT_MODE` | `go2_arm` | `go2_arm` = Go2+臂合并 agent；`arm_only` = 仅臂 agent |
-| `MUJOCO_HEADLESS` | `1` | `1` = 无头模式；`0` = 打开 MuJoCo 可视化窗口 |
+| `EDGEMCP_SIM_BACKEND` | `mujoco` | `mujoco` = MuJoCo 后端；`isaac` = Isaac Sim 后端 |
+| `EDGEMCP_AGENT_MODE` | `go2_arm` | （MuJoCo 专用）`go2_arm` = Go2+臂合并 agent；`arm_only` = 仅臂 agent |
+| `MUJOCO_HEADLESS` | `1` | （MuJoCo 专用）`1` = 无头模式；`0` = 打开 MuJoCo 可视化窗口 |
+| `ISAAC_HEADLESS` | `1` | （Isaac Sim 专用）`1` = 无头模式；`0` = 打开 Isaac Sim 可视化窗口 |
 
 ## 性能指标
 
