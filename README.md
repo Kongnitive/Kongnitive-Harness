@@ -1,605 +1,243 @@
 # Kongnitive Harness
 
-**Simulation-in-the-Loop 具身智能闭环开发系统 — Harness Engineering for Robot AI**
+**Simulation-in-the-loop 具身智能闭环开发系统（当前 MVP 基于 ROS2 + MCP + 仿真后端验证）**
 
-**Kongnitive = Kong + Cognitive，搭好 Harness，智能交给 AI。**
+Kongnitive 的目标，是把机器人开发从“人工改代码 → 手动跑仿真 → 看日志猜问题”，推进到“AI 生成节点 → 热推运行 → 读取结构化反馈 → 继续迭代”的闭环。
 
-> **近期计划**：当前实现以 ROS2 + MuJoCo 为载体完成 MVP 验证。近期将对整体架构进行重构，使 Harness 层与底层通信框架（ROS2）和仿真后端解耦，具备更广泛的适用性。
+当前仓库聚焦在一个可运行 MVP：
+- 用 `FastMCP` 暴露运行时工具给 AI agent
+- 用 `ROS2` 管理可热更新的 Python 节点
+- 用 `vector-os-nano` / MuJoCo（默认）或 Isaac Sim（可选）承接仿真执行
+- 用 episode、metrics、failure trace 支持可复现调试与自动修复
 
-> 这是个人业余时间的探索项目，进度和更新节奏以兴趣驱动为主。
+> 这是一个持续演进中的探索项目。`README` 侧重说明“当前已经能做什么”；更细的环境配置和平台说明放在独立 quickstart 文档里。
 
-## 背景与问题
+## 它解决什么问题
 
-以 Codex、Claude Code 为代表的 AI 编程工具，已经在软件开发领域初步实现了"写代码→运行→报错→修复"的自我闭环。给定一个明确的目标，AI 可以自主迭代，直到代码通过测试。这套模式在纯软件场景下运转良好，因为执行环境是确定的，失败信息是结构化的，反馈可以直接驱动下一次修改。
+在纯软件开发里，AI 已经能围绕测试和报错形成自我闭环；但在机器人系统里，失败常常只表现为运行期行为异常、时序问题、状态机切换错误或感知-动作衔接失效，反馈分散在仿真画面和日志里，难以直接驱动下一步修复。
 
-但在机器人和具身智能领域，这套闭环尚未建立。当前的机器人仿真和调试流程基本还是传统路径：人工改代码、手动部署 ROS2 节点、在仿真器里跑测试、肉眼看行为是否正常、再判断问题出在哪。整个流程割裂、慢、依赖人的经验判断。
+Kongnitive 想做的是一层 **Harness**：
+- 给 AI 一个稳定的运行入口，而不是一次性脚本
+- 给 AI 一组结构化工具，而不是只读原始日志
+- 给 AI 一个可重复执行的仿真回路，而不是一次性的人工验证
 
-根本原因在于，机器人系统的"执行环境"比普通软件复杂得多——时序问题、状态机切换、感知与动作衔接、物理约束，这些问题在静态代码里看不出来，只有在运行中才会暴露。而现有工具链并没有把仿真执行的结果结构化地接回开发流程，每次失败的证据都停留在日志文件里，需要人去消化再决定怎么改。
+## 当前能力
 
-## Harness Engineering：驾驭 AI Agent 的工程
+### 1. 热推 ROS2 节点
 
-在讨论"让 AI 做机器人开发"之前，有一个更基础的问题需要先回答：如何设计一套系统，让 AI agent 在给定目标和边界约束下，真正自主、高效地完成任务，而不是频繁失控、偏离方向或等待人工干预？
+通过 `ros_push_node(node_name, script)`，AI 可以把一个新的 Python ROS2 节点脚本写入运行环境并立即加载。节点脚本只需要满足最小约定：
+- 使用 `rclpy`
+- 定义 `Node` 子类
+- 暴露 `create_node()` 工厂函数
 
-这个问题本身就是一门工程，我们把它称为 **Harness Engineering**——驾驭工程。
+### 2. 运行期观测
 
-它不是在问"AI 能不能做"，而是在问"怎么搭架子，让 AI 做得稳"。核心设计挑战有三个：
+MCP server 提供系统与节点维度的可观测性：
+- `get_status()`：CPU、内存、磁盘、温度、运行中节点
+- `sys_get_logs()`：系统日志缓冲区
+- `ros_list_nodes()`：当前热加载节点
+- `ros_get_node(node_name)`：节点源码与元信息
+- `ros_get_node_log(node_name)`：节点执行日志
 
-**目标要足够可操作。** 自然语言目标对人清晰，对 AI 执行来说太模糊。Harness Engineering 的第一步是把目标转化为结构化的任务描述——包含任务类型、成功标准、约束条件和评估 profile。这是 AI agent 行动的锚点，也是判断每次执行是否有效的依据。
+### 3. 示例复用与经验沉淀
 
-**边界要通过环境而非指令来约束。** 单靠 prompt 告诉 AI "不要做 X"是脆弱的。更可靠的方式是在运行时环境上划定边界：哪些 behavior 可以修改、哪些节点在保护范围内、哪些操作需要人工确认。Kongnitive 的权限分层和 behavior backend 设计，本质上都是这类边界的工程实现。
+仓库内置若干示例节点，运行成功后也可以把脚本与最近日志写回成功样例库：
+- `ros_get_successful_node_examples()`
+- `ros_write_successful_node_examples()`
 
-**反馈要结构化到可以直接驱动行动。** AI agent 的自主能力上限，取决于它能读到多高质量的反馈。如果失败信息只是一堆原始日志，agent 需要大量推理才能定位问题，效率和准确率都会下降。Kongnitive 把 failure trace、metrics 和 node log 统一结构化，目的是让 agent 拿到的不是"发生了什么"，而是"哪里出了什么问题"——从而让 patch 有据可依，而不是靠猜。
+这让 AI 不必每次都从零生成节点，而是能优先参考“本项目里已经跑通过的做法”。
 
-## 项目目标
+### 4. 可复现 episode 调试
 
-Kongnitive Harness 的目标是把 simulation 从测试工具变成开发主循环的一部分，在 Harness Engineering 的设计原则下，构建一套 simulation-in-the-loop 的具身智能闭环开发系统。
+仓库已经包含一套面向自动迭代的最小 episode 工具：
+- `run_episode(seed, profile, strategy)`
+- `get_metrics(run_id)`
+- `get_failure_trace(run_id)`
+- `patch_and_restart(node_name, code)`
 
-人负责定义目标、约束和优化方向；AI 依托 Kongnitive Harness 提供的运行时能力，在仿真环境中持续修改行为代码，驱动仿真执行，读取结构化反馈，再根据证据继续迭代——最终形成一个可验证、可复用、经验可沉淀的闭环。
+其中 `patch_and_restart` 在 patch 失败时会自动回滚到旧版本，降低 AI 试错成本。
 
-> **仿真说明**：当前 MVP 阶段借助 [vector-os-nano](https://github.com/vector-robotics/vector-os-nano) 提供的 MuJoCo 仿真环境进行验证。vector-os-nano 仅作为仿真后端使用，Kongnitive 的核心架构（热推引擎、MCP 工具层、AI 迭代闭环）与具体仿真实现无耦合。
+## 系统结构
 
-## 系统概览
-
-传统 ROS2 开发：修改代码 → 编译 → 重启 → 验证（5-20 分钟/轮）
-
-Kongnitive：AI 生成代码 → 热推 → 观察仿真结果 → 再迭代（< 5 秒/轮）
-
-在当前实现里，ROS2 负责节点间通信骨干，EdgeMCP 负责热推、生命周期和运行时能力视图。
-
-## 整体架构
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Claude (AI Agent)                         │
-│  目标："让 Go2 巡逻到厨房，用臂抓取杯子放到岛台左边"          │
-└───────────┬─────────────────────────────────────────────────┘
-            │ MCP (stdio)
-            ▼
-┌─────────────────────────────────────────────────────────────┐
-│              kongnitive FastMCP Server                       │
-│                                                              │
-│  ┌──────────────────┐   ┌───────────────────────────────┐   │
-│  │   MCP Tools      │   │      NodeManager              │   │
-│  │                  │   │  (rclpy MultiThreadedExecutor)│   │
-│  │ ros_push_node ───┼──►│   热推/卸载 ROS2 节点         │   │
-│  │ ros_get_node_log─┼──►│   NodeLogStore (per-node log) │   │
-│  │ patch_and_restart│   └───────────┬───────────────────┘   │
-│  │ ros_list_capab. │               │ executor spin          │
-│  │ ros_list_nodes   │               ▼                        │
-│  │ get_status       │      ┌────────────────────┐           │
-│  └──────────────────┘      │  AI 生成的 ROS2 节点│           │
-│                             │  go2_patrol (巡逻)  │           │
-│                             │  arm_worker (操作)  │           │
-│                             │  observer (观察)    │           │
-│                             └────────┬───────────┘           │
-│                                      │ ROS2 topics           │
-│                                      ▼                       │
-│              /go2/position  /arm/task_request  /zone_events  │
-│              /world_model/state      /arm/task_result         │
-└──────────────────────────────────────┼───────────────────────┘
-                                       │ agent.execute_skill()
-                                       ▼
-                          ┌────────────────────────┐
-                          │   物理仿真后端（可插拔）  │
-                          │  MuJoCo · Go2 + SO-101  │
-                          │  Isaac Sim · PhysX       │
-                          │  success / failure 反馈  │
-                          └────────────────────────┘
-                    (通过 EDGEMCP_SIM_BACKEND 切换后端；
-                     生产环境可替换为真实硬件驱动)
-```
-
-### Go2 + 臂合并仿真
-
-默认模式下，`get_agent()` 返回一个同时控制 Go2 四足和 SO-101 机械臂的 Agent：
-
-- 臂固定在 Go2 背部（`pos="0.1 0 0.08"`）
-- 单一 MuJoCo 物理实例，1kHz 物理线程同时驱动步态和关节
-- 物体放在 20m×14m 室内场景的厨房岛台上
-- Go2 技能（walk/turn/patrol）和臂技能（pick/place/detect）共存于同一个 Agent
-- 异构节点通过 ROS2 topic 协调：巡逻节点只调移动技能，操作节点只调臂技能
-
-## AI 自主迭代闭环
-
-```
-输入：目标 + 边界条件
+```text
+AI Agent
+  │ MCP (stdio)
+  ▼
+Kongnitive FastMCP Server
+  ├─ system tools        系统状态 / 系统日志
+  ├─ node tools          ROS2 节点热推 / 查询 / 启停 / 删除
+  ├─ episode tools       运行 episode / 指标 / failure trace / patch rollback
+  └─ NodeManager         基于 rclpy MultiThreadedExecutor 管理节点生命周期
         │
-        ▼
-  AI 生成节点代码  ← 策略：扫描→检测→抓取→放置
-        │ ros_push_node(name, script)
-        ▼
-  节点热推加载     ← <100ms 零停机
-        │ executor 运行
-        ▼
-  节点执行技能     ← agent.execute_skill() → MuJoCo 真实物理
-  写入执行日志     ← node_log(result)
-        │ ros_get_node_log(name)
-        ▼
-  AI 分析结果
-        │
-   ┌────┴────┐
-   ▼         ▼
-达到目标   未达到目标
-  结束     patch_and_restart → 回到"热推加载"
+        ├─ hot-pushed ROS2 nodes
+        └─ shared sim agent
+             ├─ MuJoCo via `vector-os-nano`（默认）
+             └─ Isaac Sim（可选）
+```
+
+## 仓库结构
+
+```text
+kongnitive-ros2-edgemcp/
+├─ README.md
+├─ QUICKSTART.md
+├─ QUICKSTART_LINUX_DOCKER.md
+├─ config/
+│  ├─ server_config.yaml
+│  └─ system_prompt.txt
+├─ kongnitive_ros2_edgemcp/
+│  ├─ server.py
+│  ├─ core/
+│  │  ├─ node_manager.py
+│  │  ├─ episode_manager.py
+│  │  ├─ vector_bridge.py
+│  │  └─ ...
+│  ├─ tools/
+│  └─ utils/
+├─ examples/
+│  ├─ detector_node.py
+│  ├─ planner_node.py
+│  ├─ observer_node.py
+│  ├─ go2_patrol_node.py
+│  ├─ arm_worker_node.py
+│  └─ vector_sim_demo_node.py
+├─ tests/
+└─ vector-os-nano/
 ```
 
 ## 快速开始
 
-Kongnitive 支持两个仿真后端，通过环境变量 `EDGEMCP_SIM_BACKEND` 切换：
-
-| 后端 | 变量值 | 特点 |
-|------|--------|------|
-| MuJoCo（默认） | `mujoco` | 启动快（2-5s），依赖轻，适合快速迭代 |
-| Isaac Sim | `isaac` | NVIDIA PhysX，RTX 渲染，适合高保真仿真 |
-
 ### 前置条件
 
-- **Windows 11** 或 Windows 10 22H2+（WSLg GUI 支持）
-- **WSL2** with Ubuntu 22.04
-- **ROS2 Humble** 已安装在 WSL2 内
-- Python 3.11（Isaac Sim 后端严格要求）
+建议至少具备以下环境：
+- Python `>=3.8`
+- ROS2 Humble（提供 `rclpy`）
+- 可用的仿真后端
+  - 默认：`vector-os-nano[sim]` / MuJoCo
+  - 可选：Isaac Sim
 
-### 安装（MuJoCo 后端）
+> `rclpy` 不是通过 `pip` 安装的；它由 ROS2 提供。
 
-```bash
-# 进入 WSL2
-wsl -d Ubuntu-22.04
-
-# 安装 OpenGL 支持（MuJoCo 可视化需要）
-sudo apt update
-sudo apt install -y mesa-utils libgl1-mesa-glx
-
-# 验证 ROS2
-source /opt/ros/humble/setup.bash
-ros2 topic list
-
-# 安装 vector-os-nano（MuJoCo 仿真）
-pip install -e /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp/vector-os-nano[sim]
-
-# 安装 kongnitive
-cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
-pip install -e .
-```
-
-### 安装（Isaac Sim 后端）
-
-需要 NVIDIA GPU（RTX 20xx+）和 CUDA 12.x。Isaac Sim 5.1 支持 pip 直接安装，无需 Omniverse Launcher。**需要 Python 3.11**。
+### 1. 安装项目
 
 ```bash
-# 建立独立 venv（必须用 Python 3.11）
-python3.11 -m venv ~/isaac-venv
-source ~/isaac-venv/bin/activate
-pip install --upgrade pip
-
-# 安装 Isaac Sim 5.1（约 15GB，需要时间）
-pip install isaacsim[all,extscache]==5.1.0 --extra-index-url https://pypi.nvidia.com
-
-# 接受 EULA
-export OMNI_KIT_ACCEPT_EULA=YES
-
-# 验证安装
-python -c "from isaacsim import SimulationApp; print('OK')"
-
-# 安装 kongnitive（在同一 venv 内）
-cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp
-pip install -e .
-```
-
-### 安装（Isaac Sim 后端 — 原生 Ubuntu）
-
-原生 Ubuntu 22.04 上 CUDA 和 Vulkan 均可正常使用，Isaac Sim 支持无头和可视化两种模式。
-
-**前置条件：**
-- Ubuntu 22.04（原生，非 WSL2）
-- NVIDIA 驱动 525+（`nvidia-smi` 可正常输出）
-- CUDA 12.x（`nvcc --version` 可正常输出）
-- ROS2 Humble
-- Python 3.11
-
-```bash
-source /opt/ros/humble/setup.bash
-
-# 建立 Python 3.11 venv
-python3.11 -m venv ~/isaac-venv
-source ~/isaac-venv/bin/activate
-pip install --upgrade pip
-
-# 安装 Isaac Sim 5.1（约 15GB）
-pip install isaacsim[all,extscache]==5.1.0 --extra-index-url https://pypi.nvidia.com
-
-# 接受 EULA
-export OMNI_KIT_ACCEPT_EULA=YES
-
-# 验证安装
-python -c "from isaacsim import SimulationApp; print('OK')"
-
-# 安装 kongnitive
 cd /path/to/kongnitive-ros2-edgemcp
 pip install -e .
 ```
 
-### 启动服务
-
-**MuJoCo 后端（默认）：**
+如果你要使用默认 MuJoCo 仿真后端，还需要先安装仓库内的 `vector-os-nano`：
 
 ```bash
-source /opt/ros/humble/setup.bash
+pip install -e /path/to/kongnitive-ros2-edgemcp/vector-os-nano[sim]
+```
 
-# 无头模式
+### 2. 启动 MCP Server
+
+```bash
 python -m kongnitive_ros2_edgemcp.server
-
-# 带可视化（MuJoCo 窗口显示在 Windows 桌面）
-MUJOCO_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server
 ```
 
-**Isaac Sim 后端：**
+常见环境变量：
+- `EDGEMCP_SIM_BACKEND=mujoco`：默认后端
+- `EDGEMCP_SIM_BACKEND=isaac`：切到 Isaac Sim
+- `MUJOCO_HEADLESS=0`：打开 MuJoCo 可视化窗口
+- `ISAAC_HEADLESS=0`：打开 Isaac Sim 可视化窗口
+- `EDGEMCP_AGENT_MODE=arm_only`：使用单机械臂模式；默认 `go2_arm`
 
-```bash
-source ~/isaac-venv/bin/activate
-source /opt/ros/humble/setup.bash
+### 3. 用示例节点验证
 
-# 无头模式（WSL2 唯一可用模式）
-EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server
-```
+仓库里已经提供了几个适合快速试跑的示例：
+- `examples/vector_sim_demo_node.py`
+- `examples/go2_patrol_node.py`
+- `examples/arm_worker_node.py`
+- `examples/observer_node.py`
 
-> **WSL2 不支持 Isaac Sim**：WSL2 内核不暴露 CUDA runtime（`nvidia-smi` 走的是 Windows 侧代理，不等于 CUDA 可用），Isaac Sim 启动时会因 `no CUDA-capable device` 直接 segfault。Isaac Sim 需要原生 Ubuntu 或 Windows 原生环境，WSL2 不可用。
+如果你是从 Codex / Claude / 其他 MCP 客户端接入，推荐先做三件事：
+1. 调 `get_status()` 确认服务正常
+2. 调 `ros_list_capabilities()` 看当前可用能力
+3. 将 `examples/` 下的节点脚本通过 `ros_push_node()` 推上去验证链路
 
-**Isaac Sim 后端（原生 Ubuntu，无头）：**
-
-```bash
-source /opt/ros/humble/setup.bash
-EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server
-```
-
-**Isaac Sim 后端（原生 Ubuntu，带可视化）：**
-
-```bash
-source /opt/ros/humble/setup.bash
-EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server
-```
-
-启动成功输出：
-```
-# MuJoCo
-INFO - vector-os-nano merged Go2+Arm MuJoCo agent ready
-INFO - Starting Kongnitive ROS2 EdgeMCP server...
-
-# Isaac Sim
-INFO - isaac_bridge: Isaac Sim agent ready
-INFO - Starting Kongnitive ROS2 EdgeMCP server...
-```
-
-### 配置 Claude Code MCP
-
-在项目根目录（Windows 侧）创建或更新 `.mcp.json`：
-
-**MuJoCo 后端（默认）：**
-```json
-{
-  "mcpServers": {
-    "kongnitive": {
-      "command": "wsl",
-      "args": [
-        "-d", "Ubuntu-22.04",
-        "bash", "-c",
-        "source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && python -m kongnitive_ros2_edgemcp.server"
-      ]
-    }
-  }
-}
-```
-
-**Isaac Sim 后端：**
-```json
-{
-  "mcpServers": {
-    "kongnitive": {
-      "command": "wsl",
-      "args": [
-        "-d", "Ubuntu-22.04",
-        "bash", "-c",
-        "source ~/isaac-venv/bin/activate && source /opt/ros/humble/setup.bash && cd /mnt/d/Projects/edgemcp/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
-      ]
-    }
-  }
-}
-```
-
-重启 Claude Code 后，MCP 工具会自动加载。
-
-### 配置 MCP（原生 Ubuntu — conda 环境）
-
-本机使用 conda 环境 `env_isaacsim`。
-
-**Claude Code / Kiro（直接运行在 Ubuntu 机器上）：**
-
-```json
-{
-  "mcpServers": {
-    "kongnitive": {
-      "command": "bash",
-      "args": [
-        "-c",
-        "source /opt/ros/humble/setup.bash && source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
-      ]
-    }
-  }
-}
-```
-
-**带可视化（Isaac Sim GUI）：**
-
-```json
-{
-  "mcpServers": {
-    "kongnitive": {
-      "command": "bash",
-      "args": [
-        "-c",
-        "source /opt/ros/humble/setup.bash && source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server"
-      ]
-    }
-  }
-}
-```
-
-**通过 SSH 连接 Ubuntu 机器（Claude Code 在 Windows 上）：**
-
-```json
-{
-  "mcpServers": {
-    "kongnitive": {
-      "command": "ssh",
-      "args": [
-        "user@ubuntu-machine",
-        "source /opt/ros/humble/setup.bash && source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
-      ]
-    }
-  }
-}
-```
-
-## MCP 工具列表
+## MCP 工具一览
 
 ### 系统工具
 
-| 工具 | 说明 |
-|------|------|
-| `get_status()` | CPU、内存、磁盘、温度、ROS 节点状态 |
-| `get_system_prompt()` | 获取 AI 操作指引 |
-| `sys_get_logs(filter, level, source, limit)` | 过滤系统日志 |
+| 工具 | 作用 |
+| --- | --- |
+| `get_status()` | 查看系统资源、温度和 ROS 节点状态 |
+| `get_system_prompt()` | 获取项目级系统提示词 |
+| `sys_get_logs()` | 查询系统日志缓冲区 |
 
-### 节点管理
+### 节点工具
 
-| 工具 | 说明 |
-|------|------|
-| `ros_push_node(node_name, script)` | **热推 ROS2 节点（核心工具）** |
-| `ros_get_node_log(node_name, limit)` | **读取节点实时执行日志** |
-| `ros_list_capabilities()` | 查看当前 runtime 可见的节点、技能与核心 topic |
-| `ros_get_successful_node_examples(goal_filter, limit)` | 检索成功模板，优先持久化样本，再看当前 session，最后回退到内置 examples |
-| `ros_write_successful_node_examples(node_name, goal, summary, tags, ...)` | 将当前成功节点显式持久化为可复用模板 |
+| 工具 | 作用 |
+| --- | --- |
+| `ros_push_node(node_name, script)` | 热推并加载一个 ROS2 节点 |
 | `ros_list_nodes()` | 列出运行中的节点 |
-| `ros_get_node(node_name)` | 获取节点当前源码 |
-| `ros_start_node(node_name)` | 启动已保存的节点 |
-| `ros_stop_node(node_name)` | 停止节点 |
+| `ros_list_capabilities()` | 列出当前可用技能 / 能力 |
+| `ros_get_node(node_name)` | 获取节点源码与元信息 |
+| `ros_get_node_log(node_name)` | 获取节点执行日志 |
+| `ros_start_node(node_name)` | 启动已保存节点 |
+| `ros_stop_node(node_name)` | 停止运行中节点 |
 | `ros_restart_node(node_name)` | 重启节点 |
-| `patch_and_restart(node_name, code)` | 打补丁并重启（失败自动回滚） |
+| `ros_delete_node(node_name)` | 删除节点脚本与注册信息 |
+| `ros_get_successful_node_examples()` | 读取成功样例 |
+| `ros_write_successful_node_examples()` | 写入成功样例 |
 
-### AI 迭代工具
+### Episode / 修复工具
 
-| 工具 | 说明 |
-|------|------|
-| `run_episode(seed, profile, strategy)` | 运行可复现的仿真 episode |
-| `get_metrics(run_id)` | 获取 episode 指标和聚合统计 |
-| `get_failure_trace(run_id)` | 获取 episode 阶段级失败诊断 |
+| 工具 | 作用 |
+| --- | --- |
+| `run_episode(seed, profile, strategy)` | 运行一次可复现仿真 |
+| `get_metrics(run_id)` | 查询 episode 指标 |
+| `get_failure_trace(run_id)` | 查询阶段级失败诊断 |
+| `patch_and_restart(node_name, code)` | 打补丁并自动回滚失败版本 |
 
-## 节点脚本模板
+## 配置说明
 
-所有 AI 生成的机器人控制节点必须遵循此模式：
+默认配置位于 `config/server_config.yaml`，核心项包括：
+- `server.transport`：默认 `stdio`
+- `nodes.script_dir`：热推脚本保存目录
+- `nodes.max_nodes`：同时运行的节点数量上限
+- `logging.buffer_size` / `logging.default_limit`：日志缓冲参数
+- `ros2.executor_threads`：ROS2 executor 线程数
+- `episode.*`：episode 默认策略与阈值
 
-**MuJoCo 后端：**
+项目级系统提示词位于 `config/system_prompt.txt`。
 
-```python
-import rclpy
-from rclpy.node import Node
-from kongnitive_ros2_edgemcp.core.vector_bridge import get_agent
-from kongnitive_ros2_edgemcp.core.node_log import node_log
+## 测试
 
-class MyStrategyNode(Node):
-    def __init__(self):
-        super().__init__('my_strategy')
-        self.agent = get_agent()          # 共享 MuJoCo Agent（单例）
-        self.timer = self.create_timer(3.0, self.run_task)
+安装开发依赖后可运行：
 
-    def run_task(self):
-        result = self.agent.execute_skill("pick", {"object_label": "red_cube"})
-        node_log(self.get_name(), {
-            "skill": "pick",
-            "success": result.success,
-            "failure_reason": result.failure_reason,
-        })
-
-def create_node():
-    return MyStrategyNode()
+```bash
+pytest tests
 ```
 
-**Isaac Sim 后端：**
+当前测试主要覆盖：
+- 系统工具与日志缓冲
+- 示例节点结构约定
+- episode 工具和 rollback 行为
+- 无 ROS2 环境下的部分 mock 测试
 
-```python
-import rclpy
-from rclpy.node import Node
-from kongnitive_ros2_edgemcp.core.isaac_bridge import get_agent
-from kongnitive_ros2_edgemcp.core.node_log import node_log
+## 文档导航
 
-class MyStrategyNode(Node):
-    def __init__(self):
-        super().__init__('my_strategy')
-        self.agent = get_agent()          # 共享 Isaac Sim Agent（单例）
-        self.timer = self.create_timer(5.0, self.run_task)
+如果你只是想尽快跑起来：
+- 看 `QUICKSTART.md`
 
-    def run_task(self):
-        # execute_skill 会把请求委托给主线程执行（world.step 线程安全）
-        result = self.agent.execute_skill("scan", {})
-        node_log(self.get_name(), {
-            "skill": "scan",
-            "success": result.success,
-        })
+如果你在 Linux / Docker 环境里部署：
+- 看 `QUICKSTART_LINUX_DOCKER.md`
 
-def create_node():
-    return MyStrategyNode()
-```
+如果你想理解项目定位与规划：
+- 看 `doc/value-positioning.md`
+- 看 `doc/ROS2_Visual_Sim_Closed_Loop_Plan.md`
 
-> **注意**：Isaac Sim 后端每个技能需要数秒完成物理仿真步进，timer 间隔建议设为 5s 以上。
+## 当前状态与边界
 
-### 可用技能
+这个仓库当前更像一个 **MVP / research harness**，而不是已经稳定封装好的生产系统：
+- 核心价值在于“AI + 热推 + 仿真反馈 + 自动迭代”这条链路
+- 默认路径仍然绑定 ROS2 与当前仿真后端
+- 更广义的 Harness 抽象还在演进中
 
-#### 臂技能
-
-| 技能 | 主要参数 | 说明 |
-|------|---------|------|
-| `pick` | `object_label, mode` | 检测并抓取物体。`mode='hold'` 保持夹持（后接 place 时必须用） |
-| `place` | `x, y, z` | 放置到 arm base frame 坐标 |
-| `detect` | `query` | 检测匹配的物体 |
-| `scan` | — | 移动臂到观察位姿 |
-| `home` | — | 臂回到初始位置 |
-| `gripper_open` | — | 张开夹爪 |
-| `gripper_close` | — | 闭合夹爪 |
-
-#### Go2 移动技能
-
-| 技能 | 主要参数 | 说明 |
-|------|---------|------|
-| `walk` | `direction, distance` | 向指定方向行走 |
-| `turn` | `angle` | 原地转向（角度） |
-| `navigate` | `room` | 导航到指定房间 |
-| `stand` | — | 站立 |
-| `sit` | — | 坐下 |
-| `lie_down` | — | 趴下 |
-| `stop` | — | 紧急停止 |
-| `where_am_i` | — | 报告当前位置和朝向 |
-| `patrol` | `waypoints` | 巡逻一组路径点 |
-
-### 示例节点
-
-| 文件 | 说明 |
-|------|------|
-| `examples/vector_sim_demo_node.py` | 完整臂操作示例（推荐起点） |
-| `examples/go2_patrol_node.py` | Go2 巡逻节点，使用 `turn` + `walk` 巡逻并发布位置到 `/go2/position` |
-| `examples/arm_worker_node.py` | 臂操作节点，订阅 `/arm/task_request` 执行 pick/place；`place_at` 必填且使用 arm base frame |
-| `examples/observer_node.py` | 观察节点，订阅 `/world_model/state`，发布 `/zone_events` |
-
-## 热推机制
-
-```
-NodeManager.push_node() 执行流程：
-  1. 保存脚本到 ~/.kongnitive_ros2_edgemcp/nodes/
-  2. 卸载旧节点（如存在）
-  3. importlib 动态加载新模块
-  4. 调用 create_node() 创建实例
-  5. 添加到 MultiThreadedExecutor
-  6. 清空旧日志（AI 只看新版本结果）
-  总耗时：< 100ms
-```
-
-## Isaac Sim 后端线程模型
-
-Isaac Sim 要求 `world.step()` 必须在主线程调用，而 MCP 服务器和 ROS2 executor 都运行在后台线程。为此 Isaac 后端采用以下架构：
-
-```
-主线程
-  run_sim_loop()
-  ├── 每帧调用 sim_app.update()（渲染）
-  └── 检查 skill_queue，有请求时执行 _dispatch_skill() → world.step()
-
-后台线程 1：mcp.run()（stdio）
-  处理 MCP 工具调用（ros_push_node、ros_get_node_log 等）
-
-后台线程 2：ROS2 MultiThreadedExecutor
-  运行热推节点的 timer / callback
-
-热推节点调用技能的流程：
-  ROS2 executor 线程
-    → agent.execute_skill("scan", {})
-    → 将 ("scan", {}) 放入 skill_queue（容量 1）
-    → 阻塞等待 result_event（最长 120s）
-
-  主线程（run_sim_loop）
-    → 取出请求，调用 _dispatch_skill() → world.step(render=True)
-    → 写入 result_data，触发 result_event
-
-  ROS2 executor 线程
-    → 拿到 ExecutionResult，继续执行 node_log(...)
-```
-
-节点本身（timer、tick 逻辑）跑在 ROS2 executor 线程；只有 `world.step()` 被委托给主线程执行，保证 Isaac Sim 物理和渲染的线程安全。
-
-## 项目结构
-
-```
-kongnitive-ros2-edgemcp/
-├── kongnitive_ros2_edgemcp/
-│   ├── server.py                  # FastMCP 服务入口
-│   ├── core/
-│   │   ├── node_manager.py        # 热推引擎
-│   │   ├── node_log.py            # 节点执行日志 store
-│   │   ├── vector_bridge.py       # vector-os-nano Agent 单例（支持 go2_arm / arm_only）
-│   │   └── episode_manager.py     # 可复现 episode 循环
-│   ├── tools/
-│   │   ├── system_tools.py        # 系统监控
-│   │   ├── node_tools.py          # 节点管理
-│   │   └── episode_tools.py       # Episode + patch 工具
-├── examples/
-│   ├── vector_sim_demo_node.py    # MuJoCo 臂操作示例（推荐起点）
-│   ├── go2_patrol_node.py         # Go2 巡逻节点示例
-│   ├── arm_worker_node.py         # 臂操作 worker 节点示例
-│   ├── observer_node.py           # 观察节点示例
-│   └── detector_node.py           # 基础节点示例
-├── vector-os-nano/                # MuJoCo 仿真库（子目录）
-│   └── vector_os_nano/hardware/sim/
-│       ├── mujoco_go2_with_arm.py # Go2+臂合并控制器
-│       ├── mujoco_go2.py          # Go2 四足控制器
-│       └── mujoco_arm.py          # 单臂控制器
-└── README.md
-```
-
-## 环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `EDGEMCP_SIM_BACKEND` | `mujoco` | `mujoco` = MuJoCo 后端；`isaac` = Isaac Sim 后端 |
-| `EDGEMCP_AGENT_MODE` | `go2_arm` | （MuJoCo 专用）`go2_arm` = Go2+臂合并 agent；`arm_only` = 仅臂 agent |
-| `MUJOCO_HEADLESS` | `1` | （MuJoCo 专用）`1` = 无头模式；`0` = 打开 MuJoCo 可视化窗口 |
-| `ISAAC_HEADLESS` | `1` | （Isaac Sim 专用）`1` = 无头模式；`0` = 打开 Isaac Sim 可视化窗口 |
-
-## 性能指标
-
-| 指标 | 目标 |
-|------|------|
-| 节点热推时间 | < 100ms ✅ |
-| 工具响应时间 | < 500ms |
-| 并发节点数 | 10+ |
-
-## 故障排查
-
-**节点加载失败**
-- 确认脚本定义了 `create_node()` 函数
-- 确认 `create_node()` 返回 `rclpy.node.Node` 实例
-- 查看日志：`sys_get_logs(filter="error")`
-
-**MuJoCo Agent 未就绪**
-- 确认已安装 `vector-os-nano[sim]`：`pip install -e /path/to/vector-os-nano[sim]`
-- 服务启动日志应包含 `vector-os-nano merged Go2+Arm MuJoCo agent ready`
-
-**ros_get_node_log 返回空**
-- 节点脚本中必须调用 `node_log()` 上报结果
-- 等待至少一个 timer 周期（默认 3s）后再读取
-
-**ros_get_successful_node_examples 返回空或不稳定**
-- 当前版本会优先读取持久化成功样本
-- 若当前 session 有任意 `success: true` 日志，也会自动纳入候选，`skill == "goal"` 的样本仅排序更高
-- 若前两者都没有，会回退到 `examples/` 下的内置模板
-- 任务跑通后可调用 `ros_write_successful_node_examples(...)` 显式持久化
-
-## License
-
-MIT License
+如果你现在开始使用，最推荐的姿势是：
+- 先把它当成一个面向 AI agent 的 MCP runtime
+- 先跑通示例节点与 episode 工具
+- 再基于你自己的机器人任务逐步扩展行为节点和评估 profile
