@@ -40,9 +40,15 @@ DEFAULT_EPISODE_STRATEGY = str(EPISODE_CONFIG.get("default_strategy", "hardcoded
 # Setup logging
 log_level_name = str(SERVER_CONFIG.get("log_level", "INFO")).upper()
 log_level = getattr(logging, log_level_name, logging.INFO)
+_log_file = Path.home() / ".kongnitive_ros2_edgemcp" / "server.log"
+_log_file.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(_log_file, encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger(__name__)
 
@@ -751,17 +757,32 @@ def main():
         log_buffer = system_tools.get_log_buffer()
         log_buffer.add("INFO", "Kongnitive ROS2 EdgeMCP server starting", "system")
 
-        # Pre-warm vector-os-nano MuJoCo agent (reduces first-call latency)
+        # Pre-warm sim agent
         try:
+            import os as _os
             from kongnitive_ros2_edgemcp.core.vector_bridge import get_agent  # noqa: PLC0415
             get_agent()
-            logger.info("vector-os-nano merged Go2+Arm MuJoCo agent ready")
-            log_buffer.add("INFO", "vector-os-nano merged Go2+Arm MuJoCo agent ready", "system")
-        except ImportError:
-            logger.warning("vector-os-nano not installed — sim tools unavailable")
+            _backend = _os.environ.get("EDGEMCP_SIM_BACKEND", "mujoco")
+            _msg = f"{_backend} sim agent ready"
+            logger.info(_msg)
+            log_buffer.add("INFO", _msg, "system")
+        except Exception as _e:  # noqa: BLE001
+            logger.error("sim agent init failed: %s", _e, exc_info=True)
+            log_buffer.add("ERROR", f"sim agent init failed: {_e}", "system")
 
         # Run FastMCP server
-        mcp.run(transport="stdio")
+        import os as _os2
+        if _os2.environ.get("EDGEMCP_SIM_BACKEND") == "isaac":
+            # Isaac Sim requires world.step() on the main thread.
+            # Run MCP server in a background daemon thread and keep the
+            # main thread free for the Isaac Sim render loop.
+            import threading as _threading
+            from kongnitive_ros2_edgemcp.core.isaac_bridge import run_sim_loop  # noqa: PLC0415
+            mcp_thread = _threading.Thread(target=mcp.run, kwargs={"transport": "stdio"}, daemon=True)
+            mcp_thread.start()
+            run_sim_loop()
+        else:
+            mcp.run(transport="stdio")
 
     except KeyboardInterrupt:
         logger.info("Server interrupted by user")

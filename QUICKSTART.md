@@ -365,6 +365,51 @@ tool_timeout_sec = 120
 
 > Isaac Sim 启动较慢（30-60s），`startup_timeout_sec` 建议设为 60 以上。
 
+### ⚠️ conda + ROS2 Python 版本冲突（已踩坑）
+
+**症状：** MCP server 启动后 `ros_push_node` 报错 `rclpy not available`，或出现：
+
+```
+ModuleNotFoundError: No module named 'rclpy._rclpy_pybind11'
+The C extension '_rclpy_pybind11.cpython-311-x86_64-linux-gnu.so' isn't present
+```
+
+**根本原因：** Isaac Sim 需要 Python 3.11，ROS2 Humble 系统包的 `rclpy` C 扩展是针对 Python 3.10 编译的。在 conda Python 3.11 环境里手动把 `/opt/ros/humble/local/lib/python3.10/dist-packages` 加入 `PYTHONPATH` 无效——`.so` ABI 不兼容。
+
+**解决方案：用 robostack 在 conda 环境内安装 Python 3.11 版本的 ROS2**
+
+```bash
+conda activate env_isaacsim
+
+# 安装 mamba（更快的 solver）
+conda install mamba -c conda-forge -y
+
+# 安装 ROS2 Humble（robostack 提供 Python 3.11 编译版）
+mamba install ros-humble-desktop python-dateutil empy catkin_pkg \
+  -c robostack-staging -c conda-forge -y
+
+# 验证
+python -c "import rclpy; print('OK')"
+```
+
+安装成功后，`.mcp.json` **不需要** `source /opt/ros/humble/setup.bash`，robostack ROS2 完全在 conda 环境内自包含：
+
+```json
+{
+  "mcpServers": {
+    "kongnitive": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server"
+      ]
+    }
+  }
+}
+```
+
+> robostack 安装后系统的 `/opt/ros/humble` 仍然存在，两者互不干扰。conda 环境内不要再 source 系统的 `setup.bash`，否则可能引起路径冲突。
+
 ## 5) 第一个 AI 迭代 Demo
 
 在 Claude Code 中给出目标：

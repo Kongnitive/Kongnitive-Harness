@@ -5,7 +5,20 @@
       "Bash(python -m pytest tests/unit/test_world_model_state_topic.py -v)",
       "WebFetch(domain:docs.ros.org)",
       "WebFetch(domain:docs.isaacsim.omniverse.nvidia.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "mcp__kongnitive__ros_push_node",
+      "mcp__kongnitive__ros_get_node_log",
+      "mcp__kongnitive__sys_get_logs",
+      "mcp__kongnitive__ros_list_nodes",
+      "mcp__kongnitive__ros_list_capabilities",
+      "mcp__kongnitive__ros_get_successful_node_examples",
+      "mcp__plugin_serena_serena__find_file",
+      "mcp__plugin_serena_serena__execute_shell_command",
+      "Read(//home/bob/.kongnitive_ros2_edgemcp/**)",
+      "Read(//tmp/**)",
+      "Bash(ls /home/bob/Documents/projects/temp/Kongnitive-Harness/*.log)",
+      "Bash(journalctl -n 50 --no-pager)",
+      "Bash(awk '{print $1, $2, $10, $11}')"
     ]
   }
 }

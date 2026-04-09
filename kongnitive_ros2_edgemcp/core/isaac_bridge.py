@@ -15,6 +15,7 @@ Environment variables:
 import logging
 import os
 import pathlib
+import queue
 import re
 import tempfile
 import threading
@@ -22,9 +23,38 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+
+class ExecutionResult:
+    """Minimal drop-in for vector_os_nano.core.types.ExecutionResult."""
+
+    def __init__(
+        self,
+        success: bool,
+        status: str = "completed",
+        message: str = "",
+        failure_reason: str | None = None,
+        world_model_diff: dict | None = None,
+    ) -> None:
+        self.success = success
+        self.status = status
+        self.message = message
+        self.failure_reason = failure_reason
+        self.world_model_diff = world_model_diff or {}
+
+
 _agent: Optional[Any] = None
 _lock = threading.Lock()
 _skill_lock = threading.Lock()
+
+# Thread-safe skill dispatch queue: ROS2 threads post here, main thread executes
+_skill_queue: queue.Queue = queue.Queue(maxsize=1)
+_result_event = threading.Event()
+_result_data: dict = {}
+
+# Refs held for run_sim_loop()
+_sim_app_ref: Optional[Any] = None
+_world_ref: Optional[Any] = None
+_robot_ref: Optional[Any] = None
 
 # SO-101 joint names (order matches URDF joint definitions)
 _ARM_JOINTS = [
@@ -81,9 +111,46 @@ def _urdf_with_absolute_mesh_paths() -> str:
 
 
 def _step_sim(world: Any, steps: int = 10) -> None:
-    """Advance the simulation by N physics steps."""
+    """Advance the simulation by N physics steps (must be called from main thread)."""
     for _ in range(steps):
         world.step(render=True)
+
+
+def run_sim_loop() -> None:
+    """Drive the Isaac Sim render loop from the main thread.
+
+    Checks the skill queue on every frame. When a skill is pending, executes
+    it on the main thread (safe for world.step), then signals the result back
+    to the waiting ROS2 executor thread.
+
+    Call this AFTER get_agent() returns and AFTER the MCP server has been
+    started in a background thread.
+    """
+    if _sim_app_ref is None or _world_ref is None:
+        logger.error("run_sim_loop: Isaac Sim not initialized")
+        return
+
+    logger.info("isaac_bridge: entering main sim loop")
+    while _sim_app_ref.is_running():
+        try:
+            skill_name, params = _skill_queue.get_nowait()
+        except queue.Empty:
+            # No pending skill — just advance one frame for rendering
+            _sim_app_ref.update()
+            continue
+
+        # Execute skill on main thread
+        try:
+            result = _dispatch_skill(_world_ref, _robot_ref, skill_name, params)
+            _result_data["result"] = result
+            _result_data["error"] = None
+        except Exception as e:  # noqa: BLE001
+            _result_data["result"] = None
+            _result_data["error"] = e
+        finally:
+            _result_event.set()
+
+    logger.info("isaac_bridge: sim loop exited")
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +176,13 @@ class _IsaacAgentProxy:
         **kwargs: Any,
     ) -> Any:
         with _skill_lock:
-            return _dispatch_skill(self._world, self._robot, skill_name, params or {})
+            _result_event.clear()
+            _result_data.clear()
+            _skill_queue.put((skill_name, params or {}))
+            _result_event.wait(timeout=120)
+            if _result_data.get("error"):
+                raise _result_data["error"]
+            return _result_data.get("result")
 
     @property
     def skills(self) -> list[str]:
@@ -119,7 +192,7 @@ class _IsaacAgentProxy:
         pass
 
     def home(self) -> None:
-        _move_to_pose(self._world, self._robot, "home")
+        self.execute_skill("home", {})
 
 
 # ---------------------------------------------------------------------------
@@ -155,8 +228,6 @@ def _set_gripper(world: Any, robot: Any, value: float, steps: int = 30) -> None:
 # ---------------------------------------------------------------------------
 
 def _dispatch_skill(world: Any, robot: Any, skill_name: str, params: dict) -> Any:
-    from vector_os_nano.core.types import ExecutionResult  # noqa: PLC0415
-
     logger.info("isaac_bridge: execute_skill(%s, %s)", skill_name, params)
 
     if skill_name not in _SUPPORTED_SKILLS:
@@ -340,5 +411,12 @@ def get_agent() -> _IsaacAgentProxy:
             world.step(render=True)
 
         _agent = _IsaacAgentProxy(sim_app=sim_app, world=world, robot=robot)
+
+        # Store refs for run_sim_loop()
+        global _sim_app_ref, _world_ref, _robot_ref
+        _sim_app_ref = sim_app
+        _world_ref = world
+        _robot_ref = robot
+
         logger.info("isaac_bridge: Isaac Sim agent ready (SO-101 loaded)")
     return _agent
