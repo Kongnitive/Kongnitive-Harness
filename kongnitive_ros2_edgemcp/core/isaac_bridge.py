@@ -73,8 +73,8 @@ _POSES = {
     "reach": [0.0,   0.8,  -1.4,  0.6,  0.0,  0.0],
 }
 
-_GRIPPER_OPEN  = 0.0
-_GRIPPER_CLOSE = 1.0   # rad — approaches upper limit of gripper joint
+_GRIPPER_OPEN  = 1.0   # rad — approaches upper limit of gripper joint
+_GRIPPER_CLOSE = 0.0
 
 _SUPPORTED_SKILLS = [
     "walk", "turn", "navigate", "stand", "sit", "lie_down", "stop",
@@ -396,7 +396,7 @@ def get_agent() -> _IsaacAgentProxy:
             try:
                 from omni.isaac.core.utils.viewports import set_camera_view  # noqa: PLC0415
                 set_camera_view(
-                    eye=[0.5, 0.5, 0.4],    # camera position (x, y, z) in meters
+                    eye=[0.0, 0.7, 0.4],    # camera position rotated ~45 deg left
                     target=[0.0, 0.0, 0.2],  # look-at point (robot base area)
                 )
                 logger.info("isaac_bridge: viewport camera set")

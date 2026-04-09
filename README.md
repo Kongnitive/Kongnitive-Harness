@@ -397,6 +397,8 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 
 所有 AI 生成的机器人控制节点必须遵循此模式：
 
+**MuJoCo 后端：**
+
 ```python
 import rclpy
 from rclpy.node import Node
@@ -411,8 +413,6 @@ class MyStrategyNode(Node):
 
     def run_task(self):
         result = self.agent.execute_skill("pick", {"object_label": "red_cube"})
-
-        # 必须上报 — AI 通过 ros_get_node_log 读取
         node_log(self.get_name(), {
             "skill": "pick",
             "success": result.success,
@@ -422,6 +422,34 @@ class MyStrategyNode(Node):
 def create_node():
     return MyStrategyNode()
 ```
+
+**Isaac Sim 后端：**
+
+```python
+import rclpy
+from rclpy.node import Node
+from kongnitive_ros2_edgemcp.core.isaac_bridge import get_agent
+from kongnitive_ros2_edgemcp.core.node_log import node_log
+
+class MyStrategyNode(Node):
+    def __init__(self):
+        super().__init__('my_strategy')
+        self.agent = get_agent()          # 共享 Isaac Sim Agent（单例）
+        self.timer = self.create_timer(5.0, self.run_task)
+
+    def run_task(self):
+        # execute_skill 会把请求委托给主线程执行（world.step 线程安全）
+        result = self.agent.execute_skill("scan", {})
+        node_log(self.get_name(), {
+            "skill": "scan",
+            "success": result.success,
+        })
+
+def create_node():
+    return MyStrategyNode()
+```
+
+> **注意**：Isaac Sim 后端每个技能需要数秒完成物理仿真步进，timer 间隔建议设为 5s 以上。
 
 ### 可用技能
 
@@ -472,6 +500,38 @@ NodeManager.push_node() 执行流程：
   6. 清空旧日志（AI 只看新版本结果）
   总耗时：< 100ms
 ```
+
+## Isaac Sim 后端线程模型
+
+Isaac Sim 要求 `world.step()` 必须在主线程调用，而 MCP 服务器和 ROS2 executor 都运行在后台线程。为此 Isaac 后端采用以下架构：
+
+```
+主线程
+  run_sim_loop()
+  ├── 每帧调用 sim_app.update()（渲染）
+  └── 检查 skill_queue，有请求时执行 _dispatch_skill() → world.step()
+
+后台线程 1：mcp.run()（stdio）
+  处理 MCP 工具调用（ros_push_node、ros_get_node_log 等）
+
+后台线程 2：ROS2 MultiThreadedExecutor
+  运行热推节点的 timer / callback
+
+热推节点调用技能的流程：
+  ROS2 executor 线程
+    → agent.execute_skill("scan", {})
+    → 将 ("scan", {}) 放入 skill_queue（容量 1）
+    → 阻塞等待 result_event（最长 120s）
+
+  主线程（run_sim_loop）
+    → 取出请求，调用 _dispatch_skill() → world.step(render=True)
+    → 写入 result_data，触发 result_event
+
+  ROS2 executor 线程
+    → 拿到 ExecutionResult，继续执行 node_log(...)
+```
+
+节点本身（timer、tick 逻辑）跑在 ROS2 executor 线程；只有 `world.step()` 被委托给主线程执行，保证 Isaac Sim 物理和渲染的线程安全。
 
 ## 项目结构
 

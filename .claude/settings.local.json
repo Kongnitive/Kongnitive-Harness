@@ -18,7 +18,8 @@
       "Read(//tmp/**)",
       "Bash(ls /home/bob/Documents/projects/temp/Kongnitive-Harness/*.log)",
       "Bash(journalctl -n 50 --no-pager)",
-      "Bash(awk '{print $1, $2, $10, $11}')"
+      "Bash(awk '{print $1, $2, $10, $11}')",
+      "mcp__kongnitive__ros_write_successful_node_examples"
     ]
   }
 }
