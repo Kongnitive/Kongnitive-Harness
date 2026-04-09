@@ -314,9 +314,11 @@ wsl -d Ubuntu-22.04 cat /tmp/kongnitive-mcp.stderr.log
 
 如果日志里出现 `stream did not contain valid UTF-8`，通常说明服务往 stderr 打了非 UTF-8 内容。上面的 `LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUTF8=1` 一般能解决；若仍存在，就需要继续排查是哪个依赖在输出异常编码。
 
-### 原生 Ubuntu — Isaac Sim 后端配置
+### 原生 Ubuntu — Isaac Sim 后端配置（conda）
 
-**Claude Code 直接运行在 Ubuntu 机器上：**
+本机使用 conda 环境 `env_isaacsim`。
+
+**Claude Code / Kiro（直接运行在 Ubuntu 机器上）：**
 
 ```json
 {
@@ -325,41 +327,43 @@ wsl -d Ubuntu-22.04 cat /tmp/kongnitive-mcp.stderr.log
       "command": "bash",
       "args": [
         "-c",
-        "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
+        "source /opt/ros/humble/setup.bash && source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
       ]
     }
   }
 }
 ```
 
-**Claude Code 在 Windows 上，通过 SSH 连接 Ubuntu 机器：**
+**带可视化（Isaac Sim GUI）：**
 
 ```json
 {
   "mcpServers": {
     "kongnitive": {
-      "command": "ssh",
+      "command": "bash",
       "args": [
-        "user@ubuntu-machine",
-        "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
+        "-c",
+        "source /opt/ros/humble/setup.bash && source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server"
       ]
     }
   }
 }
 ```
 
-**Codex（原生 Ubuntu）：**
+**Codex（原生 Ubuntu，conda）：**
 
 ```toml
 [mcp_servers.kongnitive]
 command = "bash"
 args = [
   "-c",
-  "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python3 -m kongnitive_ros2_edgemcp.server"
+  "source /opt/ros/humble/setup.bash && source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python3 -m kongnitive_ros2_edgemcp.server"
 ]
 startup_timeout_sec = 60
 tool_timeout_sec = 120
 ```
+
+> Isaac Sim 启动较慢（30-60s），`startup_timeout_sec` 建议设为 60 以上。
 
 ## 5) 第一个 AI 迭代 Demo
 

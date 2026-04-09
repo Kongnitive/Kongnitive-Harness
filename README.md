@@ -307,9 +307,11 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
 
 重启 Claude Code 后，MCP 工具会自动加载。
 
-### 配置 Claude Code MCP（原生 Ubuntu）
+### 配置 MCP（原生 Ubuntu — conda 环境）
 
-如果 Claude Code 直接运行在 Ubuntu 机器上：
+本机使用 conda 环境 `env_isaacsim`。
+
+**Claude Code / Kiro（直接运行在 Ubuntu 机器上）：**
 
 ```json
 {
@@ -318,14 +320,30 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
       "command": "bash",
       "args": [
         "-c",
-        "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
+        "source /opt/ros/humble/setup.bash && source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
       ]
     }
   }
 }
 ```
 
-如果 Claude Code 在 Windows 上，通过 SSH 连接 Ubuntu 机器：
+**带可视化（Isaac Sim GUI）：**
+
+```json
+{
+  "mcpServers": {
+    "kongnitive": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "source /opt/ros/humble/setup.bash && source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac ISAAC_HEADLESS=0 python -m kongnitive_ros2_edgemcp.server"
+      ]
+    }
+  }
+}
+```
+
+**通过 SSH 连接 Ubuntu 机器（Claude Code 在 Windows 上）：**
 
 ```json
 {
@@ -334,7 +352,7 @@ INFO - Starting Kongnitive ROS2 EdgeMCP server...
       "command": "ssh",
       "args": [
         "user@ubuntu-machine",
-        "source /opt/ros/humble/setup.bash && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
+        "source /opt/ros/humble/setup.bash && source $(conda info --base)/etc/profile.d/conda.sh && conda activate env_isaacsim && export OMNI_KIT_ACCEPT_EULA=YES && cd /path/to/kongnitive-ros2-edgemcp && EDGEMCP_SIM_BACKEND=isaac python -m kongnitive_ros2_edgemcp.server"
       ]
     }
   }

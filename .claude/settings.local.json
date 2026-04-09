@@ -4,7 +4,8 @@
       "Bash(git -C D:/Projects/edgemcp/kongnitive-ros2-edgemcp diff kongnitive_ros2_edgemcp/server.py)",
       "Bash(python -m pytest tests/unit/test_world_model_state_topic.py -v)",
       "WebFetch(domain:docs.ros.org)",
-      "WebFetch(domain:docs.isaacsim.omniverse.nvidia.com)"
+      "WebFetch(domain:docs.isaacsim.omniverse.nvidia.com)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }
