@@ -137,7 +137,7 @@ Kongnitive 支持两个仿真后端，通过环境变量 `EDGEMCP_SIM_BACKEND` �
 - **Windows 11** 或 Windows 10 22H2+（WSLg GUI 支持）
 - **WSL2** with Ubuntu 22.04
 - **ROS2 Humble** 已安装在 WSL2 内
-- Python 3.10+
+- Python 3.11（Isaac Sim 后端严格要求）
 
 ### 安装（MuJoCo 后端）
 
@@ -163,18 +163,19 @@ pip install -e .
 
 ### 安装（Isaac Sim 后端）
 
-需要 NVIDIA GPU（RTX 20xx+）和 CUDA 12.x。Isaac Sim 4.x 支持 pip 直接安装，无需 Omniverse Launcher。
+需要 NVIDIA GPU（RTX 20xx+）和 CUDA 12.x。Isaac Sim 5.1 支持 pip 直接安装，无需 Omniverse Launcher。**需要 Python 3.11**。
 
 ```bash
-# 建议用独立 venv 避免与 ROS2 依赖冲突
-python3 -m venv ~/isaac-venv
+# 建立独立 venv（必须用 Python 3.11）
+python3.11 -m venv ~/isaac-venv
 source ~/isaac-venv/bin/activate
+pip install --upgrade pip
 
-# 安装 Isaac Sim（约 15GB，需要时间）
-pip install isaacsim==4.5.0 \
-    --extra-index-url https://pypi.nvidia.com \
-    isaacsim-rl isaacsim-replicator isaacsim-extscache-physics \
-    isaacsim-extscache-kit isaacsim-extscache-kit-sdk
+# 安装 Isaac Sim 5.1（约 15GB，需要时间）
+pip install isaacsim[all,extscache]==5.1.0 --extra-index-url https://pypi.nvidia.com
+
+# 接受 EULA
+export OMNI_KIT_ACCEPT_EULA=YES
 
 # 验证安装
 python -c "from isaacsim import SimulationApp; print('OK')"
@@ -193,16 +194,21 @@ pip install -e .
 - NVIDIA 驱动 525+（`nvidia-smi` 可正常输出）
 - CUDA 12.x（`nvcc --version` 可正常输出）
 - ROS2 Humble
+- Python 3.11
 
 ```bash
 source /opt/ros/humble/setup.bash
 
-# 安装 Isaac Sim（约 15GB）
-# 原生 Ubuntu 上 Isaac Sim 与 ROS2 可共存，无需独立 venv
-pip install isaacsim==4.5.0 \
-    --extra-index-url https://pypi.nvidia.com \
-    isaacsim-rl isaacsim-replicator isaacsim-extscache-physics \
-    isaacsim-extscache-kit isaacsim-extscache-kit-sdk
+# 建立 Python 3.11 venv
+python3.11 -m venv ~/isaac-venv
+source ~/isaac-venv/bin/activate
+pip install --upgrade pip
+
+# 安装 Isaac Sim 5.1（约 15GB）
+pip install isaacsim[all,extscache]==5.1.0 --extra-index-url https://pypi.nvidia.com
+
+# 接受 EULA
+export OMNI_KIT_ACCEPT_EULA=YES
 
 # 验证安装
 python -c "from isaacsim import SimulationApp; print('OK')"

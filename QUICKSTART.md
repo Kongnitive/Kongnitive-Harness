@@ -18,9 +18,39 @@ ROS2 负责节点间通信，EdgeMCP 负责热推、生命周期与运行时能�
 
 - **Windows 11** 或 Windows 10 22H2+（WSLg GUI 支持）
 - **WSL2** with Ubuntu 22.04
-- **ROS2 Humble** 已安装在 WSL2 内
-- Python 3.10+
+- **ROS2 Humble** 已安装在 WSL2 内（见下文安装步骤）
+- Python 3.11
 - Isaac Sim 后端额外需要：NVIDIA GPU（RTX 20xx+），CUDA 12.x
+
+## 0) 安装 ROS2 Humble（如未安装）
+
+参考：https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
+
+```bash
+# 设置 Locale
+sudo apt update && sudo apt install locales
+sudo locale-gen en_US en_US.UTF-8
+sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+export LANG=en_US.UTF-8
+
+# 启用 Universe 源
+sudo apt install software-properties-common
+sudo add-apt-repository universe
+
+# 添加 ROS2 软件源
+sudo apt update && sudo apt install curl -y
+export ROS_APT_SOURCE_VERSION=$(curl -s https://api.github.com/repos/ros-infrastructure/ros-apt-source/releases/latest | grep -F "tag_name" | awk -F'"' '{print $4}')
+curl -L -o /tmp/ros2-apt-source.deb "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${ROS_APT_SOURCE_VERSION}/ros2-apt-source_${ROS_APT_SOURCE_VERSION}.$(. /etc/os-release && echo ${UBUNTU_CODENAME:-${VERSION_CODENAME}})_all.deb"
+sudo dpkg -i /tmp/ros2-apt-source.deb
+
+# 安装 ROS2 Desktop
+sudo apt update && sudo apt upgrade
+sudo apt install ros-humble-desktop
+
+# 写入 ~/.bashrc 自动生效
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+source ~/.bashrc
+```
 
 ## 1) WSL2 环境准备
 
@@ -63,18 +93,19 @@ a.disconnect()
 
 ### Isaac Sim 后端
 
-Isaac Sim 4.x 支持 pip 直接安装，无需 Omniverse Launcher。建议用独立 venv 避免与 ROS2 依赖冲突。
+Isaac Sim 5.1 支持 pip 直接安装，无需 Omniverse Launcher。**需要 Python 3.11**，建议用独立 venv 避免与 ROS2 依赖冲突。
 
 ```bash
-# 建立独立 venv
-python3 -m venv ~/isaac-venv
+# 建立独立 venv（必须用 Python 3.11）
+python3.11 -m venv ~/isaac-venv
 source ~/isaac-venv/bin/activate
+pip install --upgrade pip
 
-# 安装 Isaac Sim（约 15GB）
-pip install isaacsim==4.5.0 \
-    --extra-index-url https://pypi.nvidia.com \
-    isaacsim-rl isaacsim-replicator isaacsim-extscache-physics \
-    isaacsim-extscache-kit isaacsim-extscache-kit-sdk
+# 安装 Isaac Sim 5.1（约 15GB）
+pip install isaacsim[all,extscache]==5.1.0 --extra-index-url https://pypi.nvidia.com
+
+# 接受 EULA
+export OMNI_KIT_ACCEPT_EULA=YES
 
 # 验证
 python -c "from isaacsim import SimulationApp; print('OK')"
@@ -97,12 +128,15 @@ pip install -e .
 ```bash
 source /opt/ros/humble/setup.bash
 
-# 安装 Isaac Sim（约 15GB）
-# 原生 Ubuntu 上 Isaac Sim 与 ROS2 可共存，无需独立 venv
-pip install isaacsim==4.5.0 \
-    --extra-index-url https://pypi.nvidia.com \
-    isaacsim-rl isaacsim-replicator isaacsim-extscache-physics \
-    isaacsim-extscache-kit isaacsim-extscache-kit-sdk
+# 安装 Isaac Sim 5.1（约 15GB）
+# 原生 Ubuntu 上 Isaac Sim 与 ROS2 可共存，建议用 Python 3.11 venv
+python3.11 -m venv ~/isaac-venv
+source ~/isaac-venv/bin/activate
+pip install --upgrade pip
+pip install isaacsim[all,extscache]==5.1.0 --extra-index-url https://pypi.nvidia.com
+
+# 接受 EULA
+export OMNI_KIT_ACCEPT_EULA=YES
 
 # 验证
 python -c "from isaacsim import SimulationApp; print('OK')"
