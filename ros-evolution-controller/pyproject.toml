@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ros-evolution-controller"
+version = "0.1.0"
+description = "Evidence-driven evolution control plane for ROS 2 workspaces"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["fastmcp>=3.0.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+ros-evolution-controller = "ros_evolution_controller.cli:main"
+ros-evolution-mcp = "ros_evolution_controller.mcp_server:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["."]
