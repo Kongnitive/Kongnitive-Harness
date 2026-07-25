@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from ros_evolution_controller import EvolutionController
+from ros_evolution_controller.workspace import WorkspaceError
 
 
 def git(workspace: Path, *args: str) -> str:
@@ -92,3 +93,15 @@ def test_interface_change_requires_explicit_approval(runtime_workspace: Path, tm
     assert controller.approve_candidate(candidate["candidate_id"], "interface review", approve_interfaces=True)["status"] == "approved"
     controller.promote(candidate["candidate_id"])
     assert runtime_workspace.joinpath("interfaces", "RobotState.msg").exists()
+
+
+def test_promotion_requires_clean_runtime_baseline(runtime_workspace: Path, tmp_path: Path) -> None:
+    controller = EvolutionController(runtime_workspace, tmp_path / "state")
+    candidate = controller.create_candidate()
+    Path(candidate["path"], "node.py").write_text("VALUE = 2\n", encoding="utf-8")
+    controller.run_validation(candidate["candidate_id"], {}, {}, commands=[passing_command()])
+    controller.approve_candidate(candidate["candidate_id"], "reviewed")
+    runtime_workspace.joinpath("operator-note.txt").write_text("do not publish over this\n", encoding="utf-8")
+
+    with pytest.raises(WorkspaceError, match="clean baseline"):
+        controller.promote(candidate["candidate_id"])

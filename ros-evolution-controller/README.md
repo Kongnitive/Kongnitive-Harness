@@ -41,6 +41,12 @@ colcon test-result --verbose
 topics, services, and actions. The controller records command output and errors
 as evidence instead of assuming ROS is available.
 
+## Agent integration
+
+See [Hermes and MCP Quick Start](docs/quickstart-hermes.md) or
+[Codex Quick Start](docs/quickstart-codex.md) for client configuration and the
+agent operating contract.
+
 ## MCP workflow
 
 1. `inspect_runtime` creates an observation trajectory.

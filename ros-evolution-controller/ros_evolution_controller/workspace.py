@@ -78,6 +78,11 @@ class WorkspaceManager:
     def apply_and_commit(self, patch: str, candidate_id: str) -> str:
         if not patch:
             raise WorkspaceError("Candidate has no changes to promote")
+        status = self.run(["git", "status", "--porcelain"], self.runtime_workspace)
+        if status.returncode != 0:
+            raise WorkspaceError(status.stderr.strip() or "Failed to inspect runtime workspace status")
+        if status.stdout.strip():
+            raise WorkspaceError("Runtime workspace has uncommitted changes; promotion requires a clean baseline")
         patch_process = subprocess.run(
             ["git", "apply", "--whitespace=nowarn", "-"],
             cwd=self.runtime_workspace,

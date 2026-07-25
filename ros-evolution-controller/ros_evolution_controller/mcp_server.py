@@ -66,3 +66,7 @@ def main() -> None:
     parser.add_argument("--state-dir", required=True, type=Path)
     args = parser.parse_args()
     build_server(EvolutionController(args.runtime_workspace, args.state_dir)).run()
+
+
+if __name__ == "__main__":
+    main()
